@@ -99,29 +99,13 @@ def plot_sequence_features(sequence_length, features):
     img = Image.open(buf); plt.close(fig)
     return img
 
-def get_pdb_id(uniprot_data, debug_markdown_list_ref): # Added debug_markdown_list_ref
+def get_pdb_id(uniprot_data): # Removed debug_markdown_list_ref for cleaner final version
     pdb_id = None
-    debug_markdown_list_ref.append("\n\n--- PDB ID EXTRACTION DEBUG ---\n")
     if "uniProtKBCrossReferences" in uniprot_data:
-        debug_markdown_list_ref.append(f"Found 'uniProtKBCrossReferences'. Number of XRefs: {len(uniprot_data['uniProtKBCrossReferences'])}\n")
-        for i, xref in enumerate(uniprot_data["uniProtKBCrossReferences"]):
-            if xref.get("database") == "PDB":
-                found_id = xref.get("id")
-                debug_markdown_list_ref.append(f"- XRef {i}: Database='PDB', ID='{found_id}'\n")
-                if found_id: # Take the first valid one found
-                    pdb_id = found_id
-                    debug_markdown_list_ref.append(f"-> **Selected PDB ID: {pdb_id}**\n")
-                    break 
-            # else:
-            #     if i < 10: # Log first few non-PDB XRefs for context
-            #         debug_markdown_list_ref.append(f"- XRef {i}: Database='{xref.get('database')}', ID='{xref.get('id')}' (Skipping)\n")
-
-    else:
-        debug_markdown_list_ref.append("Key 'uniProtKBCrossReferences' not found in UniProt data.\n")
-    
-    if not pdb_id:
-        debug_markdown_list_ref.append("No PDB ID found after checking all cross-references.\n")
-    debug_markdown_list_ref.append("--- END PDB ID EXTRACTION DEBUG ---\n")
+        for xref in uniprot_data["uniProtKBCrossReferences"]:
+            if xref.get("database") == "PDB" and xref.get("id"):
+                pdb_id = xref.get("id")
+                break 
     return pdb_id
 
 def get_protein_info(uniprot_id):
@@ -131,6 +115,7 @@ def get_protein_info(uniprot_id):
     try:
         response = requests.get(url); response.raise_for_status(); uniprot_api_data = response.json()
         primary_accession = uniprot_api_data.get("primaryAccession", "N/A")
+        # ... (Rest of protein info extraction - same as before)
         protein_data_dict = uniprot_api_data.get("proteinDescription", {}).get("recommendedName", {})
         protein_name = protein_data_dict.get("fullName", {}).get("value", "N/A")
         if protein_name == "N/A" and uniprot_api_data.get("proteinDescription", {}).get("submissionNames"):
@@ -166,9 +151,6 @@ def get_protein_info(uniprot_id):
             f"**Amino Acid Sequence (first 100 residues):**\n`{sequence[:100]}{'...' if len(sequence) > 100 else ''}`"
         ]
         
-        # PDB ID Extraction and Debug
-        pdb_id = get_pdb_id(uniprot_api_data, markdown_parts) # Pass markdown_parts for debug output
-
         aa_frequencies, freq_error = get_amino_acid_frequencies(sequence)
         aa_plot_update = gr.update(value=None, visible=False)
         if freq_error: markdown_parts.append(f"\n\n**Amino Acid Frequency Analysis:** {freq_error}")
@@ -176,8 +158,7 @@ def get_protein_info(uniprot_id):
             pil_image_aa = plot_amino_acid_frequencies(aa_frequencies)
             if pil_image_aa: aa_plot_update = gr.update(value=pil_image_aa, visible=True)
         
-        temp_debug_list_for_extract_features = [] 
-        seq_features = extract_sequence_features(uniprot_api_data) # Removed second argument
+        seq_features = extract_sequence_features(uniprot_api_data)
 
         feature_plot_update = gr.update(value=None, visible=False)
         if seq_features and length > 0:
@@ -186,68 +167,103 @@ def get_protein_info(uniprot_id):
             else: markdown_parts.append("\n\n**Sequence Features:** Could not generate feature plot.")
         elif not seq_features and length > 0 : markdown_parts.append("\n\n**Sequence Features:** No features of the selected types found or feature data is unavailable.")
         
+        pdb_id = get_pdb_id(uniprot_api_data)
         pdb_viewer_html_update = gr.update(value=None, visible=False)
+        
         if pdb_id:
-            safe_pdb_id_for_html = pdb_id.lower().replace('.', '_') # Make ID HTML-safe
+            safe_pdb_id_for_html = pdb_id.lower().replace('.', '_') # Make ID HTML-safe for JS function names
             ngl_div_id = f"ngl_viewport_{safe_pdb_id_for_html}"
-            iframe_html = f"""
-            <div id="{ngl_div_id}" style="width:100%; height:450px; border:1px solid #ccc;">Loading 3D Structure for {pdb_id.upper()}...</div>
-            <script src="https://cdn.jsdelivr.net/npm/ngl@2.0.0-rc.1/dist/ngl.js"></script>
-            <script>
+            
+            # JavaScript for NGL with in-div error/status reporting
+            script_js = f"""
+            function logToDiv(divId, message, isError) {{
+                var el = document.getElementById(divId);
+                if (el) {{
+                    var p = document.createElement('p');
+                    p.style.color = isError ? 'red' : 'blue';
+                    p.textContent = message;
+                    // el.innerHTML = ''; // Clear previous messages
+                    el.appendChild(p);
+                }}
+            }}
+
             function initNGLViewer_{safe_pdb_id_for_html}() {{
-                var targetDiv = document.getElementById("{ngl_div_id}");
-                if (!targetDiv) {{ console.error("NGL div '{ngl_div_id}' not found."); return; }}
-                if (typeof NGL === 'undefined') {{
-                    console.error("NGL library not loaded.");
-                    targetDiv.innerHTML = "<p style='color:red;'>NGL library failed to load. Cannot display 3D structure.</p>";
+                var targetDivId = "{ngl_div_id}";
+                logToDiv(targetDivId, "Attempting to initialize NGL for PDB: {pdb_id.upper()}", false);
+
+                if (typeof NGL === 'undefined' || !NGL || !NGL.Stage) {{
+                    logToDiv(targetDivId, "NGL library or NGL.Stage is not available.", true);
                     return;
                 }}
+                
                 try {{
-                    var stage = new NGL.Stage("{ngl_div_id}");
+                    logToDiv(targetDivId, "Creating NGL.Stage on div: " + targetDivId, false);
+                    var stage = new NGL.Stage(targetDivId);
+                    if (!stage) {{
+                        logToDiv(targetDivId, "Failed to create NGL.Stage.", true);
+                        return;
+                    }}
+                    
+                    logToDiv(targetDivId, "Loading PDB: rcsb://{pdb_id.upper()}", false);
                     stage.loadFile("rcsb://{pdb_id.upper()}", {{ defaultRepresentation: true, ext: "pdb" }})
                     .then(function (component) {{
                         if (component) {{
+                            logToDiv(targetDivId, "PDB component {pdb_id.upper()} loaded. Auto-viewing.", false);
                             component.autoView();
-                            targetDiv.innerHTML = ''; // Clear loading message on success
+                            // Clear all debug messages if successful by setting innerHTML to empty
+                            // Or keep them for verification. For now, let's keep them to see the process.
+                            // document.getElementById(targetDivId).innerHTML = ''; // Optional: clear div if successful
                         }} else {{
-                            targetDiv.innerHTML = "<p style='color:red;'>NGL Error: Could not load PDB component for {pdb_id.upper()}.</p>";
+                            logToDiv(targetDivId, "NGL Error: PDB component for {pdb_id.upper()} was not loaded.", true);
                         }}
                     }})
                     .catch(function (error) {{
-                        console.error("NGL loadFile error for {pdb_id.upper()}:", error);
-                        targetDiv.innerHTML = "<p style='color:red;'>Error loading PDB: {pdb_id.upper()}.<br>Details: " + error.message + "</p>";
+                        logToDiv(targetDivId, "NGL loadFile error for {pdb_id.upper()}: " + error.message, true);
                     }});
                     stage.setParameters({{ backgroundColor: "white" }});
                     
-                    // Resize handler
                     let resizeTimeout;
                     function handleResize() {{
                         clearTimeout(resizeTimeout);
                         resizeTimeout = setTimeout(function() {{
                             if (stage) stage.handleResize();
-                        }}, 150);
+                        }}, 200);
                     }}
-                    // Remove previous listener if any to avoid multiple listeners on re-submit
-                    if (window.nglResizeHandler_{safe_pdb_id_for_html}) {{
-                        window.removeEventListener("resize", window.nglResizeHandler_{safe_pdb_id_for_html});
-                    }}
-                    window.nglResizeHandler_{safe_pdb_id_for_html} = handleResize;
+                    var resizeHandlerKey = "nglResizeHandler_{safe_pdb_id_for_html}";
+                    if (window[resizeHandlerKey]) window.removeEventListener("resize", window[resizeHandlerKey]);
+                    window[resizeHandlerKey] = handleResize;
                     window.addEventListener("resize", handleResize, false);
-                    setTimeout(handleResize, 250); // Initial resize after a small delay
+                    setTimeout(handleResize, 300); 
                 }} catch (e) {{
-                    console.error("Error initializing NGL stage for {pdb_id.upper()}:", e);
-                    targetDiv.innerHTML = "<p style='color:red;'>Error initializing NGL for {pdb_id.upper()}: " + e.message + "</p>";
+                    logToDiv(targetDivId, "Error during NGL stage initialization for {pdb_id.upper()}: " + e.message, true);
                 }}
             }}
-            // Ensure NGL is loaded, then initialize
-            if (document.readyState === 'complete' || (document.readyState !== 'loading' && !document.documentElement.doScroll)) {{
-                initNGLViewer_{safe_pdb_id_for_html}();
-            }} else {{
-                document.addEventListener('DOMContentLoaded', initNGLViewer_{safe_pdb_id_for_html});
+
+            var nglScriptTag = document.getElementById("ngl_script_tag_{safe_pdb_id_for_html}");
+            if (!nglScriptTag) {{ // Load NGL script only if not already loaded by a previous call
+                var nglScript = document.createElement('script');
+                nglScript.id = "ngl_script_tag_{safe_pdb_id_for_html}"; // Give it an ID
+                nglScript.src = "https://cdn.jsdelivr.net/npm/ngl@2.0.0-rc.1/dist/ngl.js";
+                nglScript.onload = function() {{
+                    logToDiv("{ngl_div_id}", "NGL script loaded successfully.", false);
+                    initNGLViewer_{safe_pdb_id_for_html}();
+                }};
+                nglScript.onerror = function() {{
+                    logToDiv("{ngl_div_id}", "Failed to load NGL script (ngl.js).", true);
+                }};
+                document.head.appendChild(nglScript);
+            }} else {{ // If script tag exists, NGL might be loaded or loading
+                 if (typeof NGL !== 'undefined') {{
+                    initNGLViewer_{safe_pdb_id_for_html}();
+                 }} else {{ // Still loading, wait for DOMContentLoaded as a fallback
+                    document.addEventListener('DOMContentLoaded', initNGLViewer_{safe_pdb_id_for_html});
+                 }}
             }}
-            </script>
             """
-            pdb_viewer_html_update = gr.update(value=iframe_html, visible=True)
+            # The div where NGL will be rendered, also used for status messages
+            viewer_div_html = f'<div id="{ngl_div_id}" style="width:100%; height:450px; border:1px solid #ccc; overflow-y: auto; font-family: monospace; font-size: 10px;">Initializing 3D Viewer for {pdb_id.upper()}...</div>'
+            
+            pdb_viewer_html_update = gr.update(value=viewer_div_html + f"<script>{script_js}</script>", visible=True)
             markdown_parts.append(f"\n\n**3D Structure (PDB ID: {pdb_id.upper()}):**")
         else:
             markdown_parts.append("\n\n**3D Structure:** No PDB structure ID found or extracted.")
@@ -262,21 +278,20 @@ def get_protein_info(uniprot_id):
     except requests.exceptions.RequestException as req_err:
         return f"A network error occurred: {req_err}", gr.update(value=None, visible=False), gr.update(value=None, visible=False), gr.update(value=None, visible=False)
     except Exception as e:
-        # traceback.print_exc(file=sys.stderr) 
         return f"An unexpected error occurred while processing ID '{uniprot_id}'. Details: {str(e)[:150]}", gr.update(value=None, visible=False), gr.update(value=None, visible=False), gr.update(value=None, visible=False)
 
 outputs_list = [
     gr.Markdown(label="Protein Information"),
     gr.Image(label="Amino Acid Frequency Plot", type="pil", show_label=True, visible=False),
     gr.Image(label="Sequence Features Plot", type="pil", show_label=True, visible=False),
-    gr.HTML(label="3D Structure Viewer", visible=False)
+    gr.HTML(label="3D Structure Viewer", visible=False) # This will display the div and run the script
 ]
 iface = gr.Interface(
     fn=get_protein_info,
     inputs=gr.Textbox(label="Enter UniProt ID (e.g., P05067 or INS_HUMAN)", placeholder="e.g., P0DP23"),
     outputs=outputs_list,
-    title="Protein Profile Viewer (v0.6.2 - PDB Debug)", 
-    description="Enter a UniProt ID to display its basic information, amino acid frequency, sequence features, and 3D structure (if available). PDB ID extraction debug is active.",
+    title="Protein Profile Viewer (v0.6.3 - In-Div NGL Debug)", 
+    description="Enter a UniProt ID. 3D viewer will attempt to display status/errors in its own panel.",
     examples=[["P05067"], ["1A00"], ["6M0J"], ["P00533"], ["Q9BYF1"], ["P0DP23"]],
     flagging_options=None 
 )

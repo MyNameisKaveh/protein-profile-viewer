@@ -9,9 +9,7 @@ import sys
 import traceback
 import json 
 
-# --- Constants ---
-UNIPROT_API_URL_KB = "https://rest.uniprot.org/uniprotkb/{accession}" # Base for specific entry
-UNIPROT_API_URL_SEARCH = "https://rest.uniprot.org/uniprotkb/search" # Base for search
+UNIPROT_API_URL = "https://rest.uniprot.org/uniprotkb/{accession}.json"
 
 AMINO_ACID_NAMES = {
     'A': 'Alanine', 'R': 'Arginine', 'N': 'Asparagine', 'D': 'Aspartic acid',
@@ -21,8 +19,6 @@ AMINO_ACID_NAMES = {
     'T': 'Threonine', 'W': 'Tryptophan', 'Y': 'Tyrosine', 'V': 'Valine'
 }
 STANDARD_AMINO_ACIDS_ORDER = "ARNDCQEGHILKMFPSTWYV" 
-
-# --- Helper Functions for Data Extraction ---
 
 def get_amino_acid_frequencies(sequence):
     if not sequence or sequence == "N/A": return None, "Sequence not available for analysis."
@@ -119,7 +115,8 @@ def extract_interactions(uniprot_data):
                         interactions_list.append(f"- Interacts with: **{partner_display_name}**")
     if not interactions_list:
         return "No specific interaction partners listed in UniProt comments."
-    return "\n".join(interactions_list)
+    # Sort alphabetically for consistency
+    return "\n".join(sorted(interactions_list))
 
 def extract_pathways(uniprot_data):
     pathways = []
@@ -160,24 +157,27 @@ def extract_disease_info(uniprot_data):
                         if note_val: disease_md += f"   - *Note:* {note_val}\n"
                 disease_info_list.append(disease_md)
     if not disease_info_list: return "No specific disease association information found in UniProt comments."
-    return "\n---\n".join(disease_info_list)
+    return "\n---\n".join(sorted(disease_info_list)) # Sort alphabetically by disease name
 
 def extract_publications(uniprot_data):
     publications_list = []
     if "references" in uniprot_data:
-        for ref_idx, ref in enumerate(uniprot_data.get("references", [])): 
+        for ref_idx, ref in enumerate(uniprot_data.get("references", [])):
             citation = ref.get("citation", {})
             title = citation.get("title", "N/A")
             authors = ", ".join(citation.get("authors", ["N/A"]))
-            journal = citation.get("journalName", "N/A"); volume = citation.get("volume", "")
-            first_page = citation.get("firstPage", ""); last_page = citation.get("lastPage", "")
+            journal = citation.get("journalName", "N/A")
+            volume = citation.get("volume", "")
+            first_page = citation.get("firstPage", "")
+            last_page = citation.get("lastPage", "")
             publication_date = citation.get("publicationDate", "")
             pubmed_id = None; doi_id = None
             if "citationCrossReferences" in citation:
                 for xref_cite in citation["citationCrossReferences"]:
                     if xref_cite.get("database") == "PubMed": pubmed_id = xref_cite.get("id")
                     elif xref_cite.get("database") == "DOI": doi_id = xref_cite.get("id")
-            pub_md = f"**{ref_idx + 1}. Title:** {title}\n"; pub_md += f"   - *Authors:* {authors}\n"
+            pub_md = f"**{ref_idx + 1}. Title:** {title}\n"
+            pub_md += f"   - *Authors:* {authors}\n"
             pub_md += f"   - *Journal:* {journal}"
             if volume: pub_md += f", Vol. {volume}"
             if first_page: pub_md += f", pp. {first_page}"
@@ -187,115 +187,72 @@ def extract_publications(uniprot_data):
             if pubmed_id: pub_md += f"   - *PubMed:* [{pubmed_id}](https://pubmed.ncbi.nlm.nih.gov/{pubmed_id}/)\n"
             if doi_id: pub_md += f"   - *DOI:* [{doi_id}](https://doi.org/{doi_id})\n"
             publications_list.append(pub_md)
-    if not publications_list: return "No publication information found."
+    if not publications_list: return "No publication information found in this UniProt entry."
     return "\n---\n".join(publications_list)
 
 def extract_cross_references(uniprot_data):
     xref_list = []
-    target_databases = { "Ensembl": "", "GeneID": "https://www.ncbi.nlm.nih.gov/gene/", 
-                         "RefSeq": "https://www.ncbi.nlm.nih.gov/nuccore/", "GO": "https://amigo.geneontology.org/amigo/term/", 
-                         "InterPro": "https://www.ebi.ac.uk/interpro/entry/InterPro/", "Pfam": "https://www.ebi.ac.uk/interpro/entry/pfam/", 
-                         "PDB": "https://www.rcsb.org/structure/" }
+    target_databases = {
+        "Ensembl": "https://www.ensembl.org/id/", "GeneID": "https://www.ncbi.nlm.nih.gov/gene/", 
+        "RefSeq": "https://www.ncbi.nlm.nih.gov/nuccore/", "GO": "https://amigo.geneontology.org/amigo/term/", 
+        "InterPro": "https://www.ebi.ac.uk/interpro/entry/InterPro/", 
+        "Pfam": "https://www.ebi.ac.uk/interpro/entry/pfam/", 
+        "PDB": "https://www.rcsb.org/structure/",
+        "KEGG": "https://www.genome.jp/dbget-bin/www_bget?", # Add KEGG gene link
+        "Reactome": "https://reactome.org/content/detail/" # Reactome protein link (usually same as pathway)
+    }
+    grouped_xrefs = {db: [] for db in target_databases}
     if "uniProtKBCrossReferences" in uniprot_data:
-        grouped_xrefs = {db: [] for db in target_databases}
         for xref in uniprot_data["uniProtKBCrossReferences"]:
             db_name = xref.get("database")
             if db_name in target_databases:
                 xref_id = xref.get("id"); link_url = None; display_text = xref_id
                 if db_name == "Ensembl" and "properties" in xref:
                     for prop in xref["properties"]:
-                        if prop.get("key") == "GeneId": 
-                           link_url = f"https://www.ensembl.org/Homo_sapiens/Gene/Summary?g={prop.get('value')}"; display_text=prop.get('value'); break
-                    if link_url is None: 
+                        if prop.get("key") == "GeneId":
+                            ensembl_gene_id = prop.get("value")
+                            link_url = f"https://www.ensembl.org/Homo_sapiens/Gene/Summary?g={ensembl_gene_id}"
+                            display_text = ensembl_gene_id; break
+                    if link_url is None:
                         for prop in xref["properties"]:
-                           if prop.get("key") == "ProteinId": 
-                              link_url = f"https://www.ensembl.org/Homo_sapiens/Transcript/Summary?p={prop.get('value')}"; display_text=prop.get('value'); break
+                           if prop.get("key") == "ProteinId":
+                                ensembl_prot_id = prop.get("value")
+                                link_url = f"https://www.ensembl.org/Homo_sapiens/Transcript/Summary?p={ensembl_prot_id}"
+                                display_text = ensembl_prot_id; break
                 elif db_name == "RefSeq" and "properties" in xref:
                      for prop in xref["properties"]:
                          if prop.get("key") == "ProteinId" or prop.get("key") == "NucleotideSequenceId":
-                             link_url = target_databases[db_name] + prop.get("value"); display_text=prop.get('value'); break
+                             refseq_id = prop.get("value")
+                             link_url = target_databases[db_name] + refseq_id
+                             display_text = refseq_id; break
                 elif db_name == "GO" and xref_id:
                     term_name = xref_id
                     if "properties" in xref:
                         for prop in xref["properties"]:
                              if prop.get("key") == "GoTerm": term_name = prop.get("value"); break
                     link_url = target_databases[db_name] + xref_id; display_text = f"{term_name} ({xref_id})"
-                elif db_name == "Pfam" and xref_id: link_url = target_databases[db_name] + xref_id
+                elif db_name == "Pfam" and xref_id:
+                    link_url = f"https://www.ebi.ac.uk/interpro/entry/pfam/{xref_id}"
                 elif xref_id: link_url = target_databases[db_name] + xref_id
+                
                 if link_url: grouped_xrefs[db_name].append(f"[{display_text}]({link_url})")
+
         for db_name, links in grouped_xrefs.items():
             if links: xref_list.append(f"**{db_name}:** " + ", ".join(sorted(list(set(links)))))
     if not xref_list: return "No cross-references found for the selected databases."
     return "\n".join(xref_list)
 
-# --- Main Function to Fetch and Process Data ---
-def get_protein_info(query_or_id):
-    empty_plot = gr.update(value=None, visible=False); empty_str = ""
-    err_msg_default = "Error."
-    # Define the number of outputs expected by the UI
-    num_outputs = 9
-    outputs_on_error = [err_msg_default] + [empty_plot if i < 2 else empty_str for i in range(num_outputs - 1)]
-
-    if not query_or_id:
-        outputs_on_error[0] = "Please enter a UniProt ID or protein/gene name."
-        return tuple(outputs_on_error)
+def get_protein_info(uniprot_id):
+    empty_plot = gr.update(value=None, visible=False); empty_str = ""; err_msg_default = "Error."
+    outputs_on_error = (err_msg_default, empty_plot, empty_plot, empty_str, 
+                        empty_str, empty_str, empty_str, empty_str, empty_str) 
+    if not uniprot_id:
+        return ("Please enter a UniProt ID.",) + outputs_on_error[1:]
     
-    query_or_id = query_or_id.strip()
-    data = None
-    search_message = "" 
-
-    # Step 1: Try direct fetch
+    url = UNIPROT_API_URL.format(accession=uniprot_id.strip().upper())
     try:
-        url_direct = f"{UNIPROT_API_URL_KB}/{query_or_id.upper()}.json"
-        response_direct = requests.get(url_direct)
-        response_direct.raise_for_status() 
-        data = response_direct.json()
-    except requests.exceptions.HTTPError as http_err:
-        if http_err.response.status_code != 404:
-            outputs_on_error[0] = f"HTTP error fetching entry '{query_or_id}': {http_err}"
-            return tuple(outputs_on_error)
-        # If 404, continue to search
-    except requests.exceptions.RequestException as req_err:
-        outputs_on_error[0] = f"Network error: {req_err}"
-        return tuple(outputs_on_error)
-    except Exception as e: 
-        outputs_on_error[0] = f"Error fetching entry '{query_or_id}': {str(e)[:100]}"
-        return tuple(outputs_on_error)
-
-    # Step 2: Try search if direct fetch failed
-    if data is None:
-        try:
-            search_params = {'query': f'(gene:"{query_or_id}") OR (protein_name:"{query_or_id}") OR ({query_or_id})', 'size': 1, 'format': 'json', 'fields': 'accession'}
-            response_search = requests.get(UNIPROT_API_URL_SEARCH, params=search_params)
-            response_search.raise_for_status()
-            search_results = response_search.json()
-            if search_results and "results" in search_results and len(search_results["results"]) > 0:
-                first_result_accession = search_results["results"][0].get("primaryAccession")
-                if first_result_accession:
-                    search_message = (f"Input '{query_or_id}' not found as direct ID. "
-                                      f"Showing data for the first search result: **{first_result_accession}**.\n\n")
-                    url_found = f"{UNIPROT_API_URL_KB}/{first_result_accession}.json"
-                    response_found = requests.get(url_found); response_found.raise_for_status()
-                    data = response_found.json()
-                else:
-                    outputs_on_error[0] = f"Search for '{query_or_id}' returned results, but couldn't get accession ID."
-                    return tuple(outputs_on_error)
-            else:
-                outputs_on_error[0] = f"No results found for '{query_or_id}' via direct ID or search."
-                return tuple(outputs_on_error)
-        except requests.exceptions.RequestException as req_err:
-            outputs_on_error[0] = f"Network error during search: {req_err}"
-            return tuple(outputs_on_error)
-        except Exception as e: 
-             outputs_on_error[0] = f"Error during search for '{query_or_id}': {str(e)[:100]}"
-             return tuple(outputs_on_error)
-
-    # Step 3: Process data if available
-    if data is None: 
-         outputs_on_error[0] = "Failed to retrieve data after direct fetch and search."
-         return tuple(outputs_on_error)
-
-    try:
+        response = requests.get(url); response.raise_for_status(); data = response.json()
+        
         acc = data.get("primaryAccession", "N/A"); id_display = data.get("uniProtkbId", "N/A")
         uniprot_link = f"https://www.uniprot.org/uniprotkb/{acc}/entry"
         name_dict = data.get("proteinDescription", {}).get("recommendedName", {}); name = name_dict.get("fullName", {}).get("value", "N/A")
@@ -325,8 +282,7 @@ def get_protein_info(query_or_id):
                 texts = c_item.get("texts", [])
                 if texts: func_comment = texts[0].get("value", "N/A"); break
         
-        overview_md = (f"{search_message}"
-                       f"## {id_display} ({acc})\n"
+        overview_md = (f"## {id_display} ({acc})\n"
                        f"[{acc} on UniProt]({uniprot_link})\n\n"
                        f"**Protein:** {name}\n**Gene:** {gene_str}\n**Status:** {status_val}\n"
                        f"**Organism:** {org_display}\n**Length:** {length} aa\n"
@@ -334,7 +290,7 @@ def get_protein_info(query_or_id):
                        f"**Function Snippet:**\n{func_comment}\n\n"
                        f"**Sequence (first 100 aa):**\n`{seq_val[:100]}{'...' if len(seq_val) > 100 else ''}`\n\n"
                        f"--- \n*More details in other tabs.*")
-        
+
         interactions_md = extract_interactions(data)
         pathways_md = extract_pathways(data)
         disease_md = extract_disease_info(data)
@@ -359,40 +315,42 @@ def get_protein_info(query_or_id):
         return (overview_md, aa_plot_upd, feat_plot_upd, feat_msg, 
                 pathways_md, interactions_md, disease_md, publications_md, xref_md)
 
-    except Exception as e: # Catch errors during data processing
-        outputs_on_error[0] = f"Error processing data for {query_or_id}: {str(e)[:150]}"
-        return tuple(outputs_on_error)
+    except requests.exceptions.HTTPError as e: 
+        err_msg_http = f"Error: ID '{uniprot_id}' not found." if e.response.status_code == 404 else f"HTTP error: {e}"
+        return (err_msg_http,) + outputs_on_error[1:]
+    except Exception as e:
+        return (f"Error: {str(e)[:150]}",) + outputs_on_error[1:]
 
-# --- UI Definition ---
 with gr.Blocks(theme=gr.themes.Glass()) as iface:
-    gr.Markdown("# Protein Profile Viewer (v1.5 - Name Search & XRefs)")
-    gr.Markdown("Enter a UniProt ID (e.g., P00533) or a protein/gene name (e.g., EGFR) to search and display its profile.")
-    
+    gr.Markdown("# Protein Profile Viewer (v1.4 - Cross-references)")
+    gr.Markdown("Enter a UniProt ID to explore its details including overview, sequence analysis, functional context, publications, and links to other databases.")
     with gr.Row():
-        protein_id_input = gr.Textbox(label="Enter UniProt ID or Name", placeholder="e.g., P00533 or EGFR", scale=3)
+        protein_id_input = gr.Textbox(label="Enter UniProt ID", placeholder="e.g., P00533", scale=3)
         submit_button = gr.Button("Submit", scale=1, variant="primary")
-
     with gr.Tabs():
         with gr.TabItem("Overview"):
-            gr.Markdown("### Protein Overview\nKey information, function snippet, sequence preview, and link to UniProt.")
+            gr.Markdown("### Protein Overview\nKey information about the protein, including its UniProt ID, name, gene, organism, length, function snippet, and a link to the full UniProt entry. The first 100 amino acids of the sequence are also displayed here.")
             overview_output = gr.Markdown()
         with gr.TabItem("Analysis Plots"):
-            gr.Markdown("### Sequence Analysis Visualizations\nAmino acid frequency and sequence features.")
+            gr.Markdown("### Sequence Analysis Visualizations\nGraphical representations of amino acid composition and annotated sequence features.")
             with gr.Column(): 
                 aa_freq_plot_output = gr.Image(label="Amino Acid Frequency Plot", type="pil", show_label=True, visible=False)
                 seq_features_plot_output = gr.Image(label="Sequence Features Plot", type="pil", show_label=True, visible=False)
                 seq_features_message_output = gr.Markdown() 
         with gr.TabItem("Functional Context"):
-            gr.Markdown("### Pathways, Interactions & Disease\nBiological context of the protein.")
-            with gr.Accordion("Biological Pathways", open=False): pathways_output = gr.Markdown()
-            with gr.Accordion("Protein Interactions", open=False): interactions_output = gr.Markdown()
-            with gr.Accordion("Disease Associations", open=False): disease_output = gr.Markdown()
+            gr.Markdown("### Pathways, Interactions & Disease\nBiological context: pathways, interaction partners, and associated diseases.")
+            with gr.Accordion("Biological Pathways (KEGG, Reactome)", open=False):
+                 pathways_output = gr.Markdown()
+            with gr.Accordion("Protein Interactions", open=False):
+                 interactions_output = gr.Markdown()
+            with gr.Accordion("Disease Associations", open=False):
+                 disease_output = gr.Markdown()
         with gr.TabItem("Publications"):
-            gr.Markdown("### Relevant Publications\nAssociated scientific literature from UniProt.")
+            gr.Markdown("### Relevant Publications\nA list of scientific publications from UniProt.")
             publications_output = gr.Markdown()
-        with gr.TabItem("Cross-references"): 
-             gr.Markdown("### Database Links\nLinks to this protein's entry in other relevant biological databases.")
-             xref_output = gr.Markdown() 
+        with gr.TabItem("Cross-references"): # New Tab
+             gr.Markdown("### Database Links\nLinks to this protein's entry in other relevant biological databases (e.g., Ensembl, RefSeq, GO, PDB).")
+             xref_output = gr.Markdown() # New output component
 
     submit_button.click(
         fn=get_protein_info,
@@ -400,9 +358,8 @@ with gr.Blocks(theme=gr.themes.Glass()) as iface:
         outputs=[overview_output, aa_freq_plot_output, seq_features_plot_output, seq_features_message_output, 
                  pathways_output, interactions_output, disease_output, publications_output, xref_output] 
     )
-    
     gr.Examples(
-        examples=[["P05067"], ["P00533"], ["EGFR"], ["P04637"], ["TP53"], ["INS_HUMAN"], ["Insulin"]],
+        examples=[["P05067"], ["P00533"], ["Q9BYF1"], ["P0DP23"], ["P04637"]],
         inputs=protein_id_input
     )
 

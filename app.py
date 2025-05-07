@@ -33,7 +33,6 @@ def get_amino_acid_frequencies(sequence):
         return None, "No valid amino acids found in sequence for counting."
         
     counts = Counter(cleaned_sequence)
-    # Ensure all standard amino acids are present in the output, in a defined order
     frequencies = {aa: counts.get(aa, 0) for aa in STANDARD_AMINO_ACIDS_ORDER}
     return frequencies, None
 
@@ -45,20 +44,16 @@ def plot_amino_acid_frequencies(frequencies):
     if not frequencies:
         return None
 
-    # Use the defined order for keys to ensure consistent plotting
     ordered_keys = [key for key in STANDARD_AMINO_ACIDS_ORDER if key in frequencies]
-    
-    # Create labels like "A: Alanine"
     labels = [f"{aa}: {AMINO_ACID_NAMES.get(aa, aa)}" for aa in ordered_keys]
     values = [frequencies[aa] for aa in ordered_keys]
 
-
-    fig, ax = plt.subplots(figsize=(12, 7)) # Increased figure size for better label display
+    fig, ax = plt.subplots(figsize=(12, 7)) 
     bars = ax.bar(labels, values, color='skyblue')
     ax.set_xlabel("Amino Acid")
     ax.set_ylabel("Frequency")
     ax.set_title("Amino Acid Frequency Plot")
-    plt.xticks(rotation=75, ha="right", fontsize=8) # Rotate more for long labels, adjust font
+    plt.xticks(rotation=75, ha="right", fontsize=8) 
     plt.tight_layout()
 
     buf = io.BytesIO()
@@ -88,9 +83,8 @@ def extract_sequence_features(uniprot_data):
                     start_info = location.get("start", {})
                     end_info = location.get("end", {})
                     
-                    # Check if 'value' exists, otherwise it might be an unknown position
                     if "value" not in start_info or "value" not in end_info:
-                        continue # Skip if positions are not clearly defined
+                        continue 
 
                     begin_pos = int(start_info["value"])
                     end_pos = int(end_info["value"])
@@ -113,7 +107,7 @@ def plot_sequence_features(sequence_length, features):
     if not features or sequence_length == 0:
         return None
 
-    fig, ax = plt.subplots(figsize=(12, max(3, len(features) * 0.4) + 1)) # +1 for title/legend space
+    fig, ax = plt.subplots(figsize=(12, max(3, len(features) * 0.4) + 1)) 
     ax.set_xlim(0, sequence_length)
     
     ax.set_xlabel("Amino Acid Position")
@@ -131,11 +125,7 @@ def plot_sequence_features(sequence_length, features):
         color = feature["color"]
         
         ax.barh(y_pos_counter, end - begin, height=bar_height, left=begin, color=color, edgecolor='black', alpha=0.7)
-        # Optional: Add feature description text on the bar
-        # ax.text(begin + (end - begin) / 2, y_pos_counter, feature['description'][:25], 
-        #         ha='center', va='center', fontsize=7, color='white' if color in ['blue', 'red', 'purple'] else 'black')
-
-
+        
         if feature['type'] not in plotted_feature_types_in_legend:
             legend_handles[feature['type']] = plt.Rectangle((0, 0), 1, 1, fc=color, alpha=0.7)
             plotted_feature_types_in_legend.add(feature['type'])
@@ -151,7 +141,7 @@ def plot_sequence_features(sequence_length, features):
     if legend_handles:
         ax.legend(legend_handles.values(), legend_handles.keys(), title="Feature Types", bbox_to_anchor=(1.02, 1), loc='upper left', fontsize=8)
 
-    plt.tight_layout(rect=[0, 0, 0.83, 0.97]) # Adjust rect for title and legend
+    plt.tight_layout(rect=[0, 0, 0.83, 0.97])
 
     buf = io.BytesIO()
     plt.savefig(buf, format='png')
@@ -163,6 +153,8 @@ def plot_sequence_features(sequence_length, features):
 def get_protein_info(uniprot_id):
     """
     Fetches and processes protein information from UniProt API.
+    Returns main info markdown, a PIL image for the frequency plot, 
+    and a PIL image for the sequence features plot.
     """
     if not uniprot_id:
         return "Please enter a UniProt ID.", gr.update(value=None, visible=False), gr.update(value=None, visible=False)
@@ -198,7 +190,7 @@ def get_protein_info(uniprot_id):
         length = sequence_info.get("length", 0)
         
         calculated_mol_weight_str = "N/A"
-        if sequence != "N/A" and length > 0: # Added length > 0 check
+        if sequence != "N/A" and length > 0:
             try:
                 cleaned_sequence_for_mw = "".join(filter(lambda x: x in AMINO_ACID_NAMES, sequence.upper()))
                 if cleaned_sequence_for_mw:
@@ -229,6 +221,7 @@ def get_protein_info(uniprot_id):
             f"**Amino Acid Sequence (first 100 residues):**\n`{sequence[:100]}{'...' if len(sequence) > 100 else ''}`"
         )
         
+        # Amino acid frequency plot
         aa_frequencies, freq_error = get_amino_acid_frequencies(sequence)
         aa_plot_update = gr.update(value=None, visible=False)
         if freq_error:
@@ -238,14 +231,16 @@ def get_protein_info(uniprot_id):
             if pil_image_aa:
                 aa_plot_update = gr.update(value=pil_image_aa, visible=True)
 
+        # Sequence features plot
         seq_features = extract_sequence_features(uniprot_api_data)
         feature_plot_update = gr.update(value=None, visible=False)
         if seq_features and length > 0:
             pil_image_features = plot_sequence_features(length, seq_features)
             if pil_image_features:
                 feature_plot_update = gr.update(value=pil_image_features, visible=True)
-        elif not seq_features and length > 0 :
+        elif not seq_features and length > 0 : # Only add this message if sequence exists but no features found
              main_info_md += "\n\n**Sequence Features:** No features of the selected types found or feature data is unavailable."
+        # If length is 0 or sequence is N/A, the feature plot will naturally be None and hidden.
 
         return main_info_md, aa_plot_update, feature_plot_update
 
@@ -256,9 +251,9 @@ def get_protein_info(uniprot_id):
     except requests.exceptions.RequestException as req_err:
         return f"A network error occurred: {req_err}", gr.update(value=None, visible=False), gr.update(value=None, visible=False)
     except Exception as e:
-        # print(f"Unexpected error for {uniprot_id}: {e}", file=sys.stderr)
-        # traceback.print_exc(file=sys.stderr) # Good for debugging
-        return f"An unexpected error occurred. Please check the ID ({uniprot_id}) and try again. Error: {str(e)[:100]}", gr.update(value=None, visible=False), gr.update(value=None, visible=False)
+        # print(f"Unexpected error for {uniprot_id}: {e}", file=sys.stderr) # For server-side logging
+        # traceback.print_exc(file=sys.stderr) # For detailed traceback
+        return f"An unexpected error occurred while processing ID '{uniprot_id}'. Details: {str(e)[:100]}", gr.update(value=None, visible=False), gr.update(value=None, visible=False)
 
 # Define Gradio UI (English)
 outputs_list = [
@@ -273,7 +268,7 @@ iface = gr.Interface(
     outputs=outputs_list,
     title="Protein Profile Viewer (v0.3)",
     description="Enter a UniProt ID to display its basic information, amino acid frequency, and sequence features plot.",
-    examples=[["P05067"], ["INS_HUMAN"], ["CYC_HUMAN"],["Q9BYF1"], ["P0DP23"]], # P0DP23 (Spike G. - SARS-CoV-2)
+    examples=[["P05067"], ["INS_HUMAN"], ["CYC_HUMAN"],["Q9BYF1"], ["P0DP23"]],
     flagging_options=None 
 )
 

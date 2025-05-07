@@ -114,8 +114,7 @@ def extract_interactions(uniprot_data):
                         if interactant_two_gene:
                             partner_display_name = f"{interactant_two_gene} ({interactant_two_acc})"
                         interactions_list.append(f"- Interacts with: **{partner_display_name}**")
-    if not interactions_list:
-        return "No specific interaction partners listed in UniProt comments."
+    if not interactions_list: return "No specific interaction partners listed in UniProt comments."
     return "\n".join(sorted(interactions_list))
 
 def extract_pathways(uniprot_data):
@@ -179,11 +178,11 @@ def extract_publications(uniprot_data):
             if volume: pub_md += f", Vol. {volume}"
             if first_page: pub_md += f", pp. {first_page}"
             if last_page: pub_md += f"-{last_page}"
-            # ---- CORRECTED LINE ----
+            # --- CORRECTED INDENTATION HERE ---
             if publication_date: 
-                pub_md += f" ({publication_date})" # Add date if available
+                pub_md += f" ({publication_date})" # Correctly indented under the main journal line logic
             pub_md += "\n" # Always add newline after journal line
-            # ---- END CORRECTION ----
+            # --- END CORRECTION ---
             if pubmed_id: pub_md += f"   - *PubMed:* [{pubmed_id}](https://pubmed.ncbi.nlm.nih.gov/{pubmed_id}/)\n"
             if doi_id: pub_md += f"   - *DOI:* [{doi_id}](https://doi.org/{doi_id})\n"
             publications_list.append(pub_md)
@@ -233,10 +232,30 @@ def extract_cross_references(uniprot_data):
     if not xref_list: return "No cross-references found for the selected databases."
     return "\n".join(xref_list)
 
+def search_uniprot_by_name(search_term, result_limit=5):
+    if not search_term or len(search_term) < 3: return "Enter at least 3 characters."
+    params = { "query": f'({search_term}) AND (reviewed:true)', "fields": "accession,protein_name,organism_name,id", "format": "json", "size": result_limit }
+    md_parts = [f"### Search Results for '{search_term}' (Top {result_limit} Reviewed):\n"]
+    try:
+        response = requests.get(UNIPROT_SEARCH_URL, params=params); response.raise_for_status(); data = response.json()
+        results = data.get("results")
+        if not results: md_parts.append("No reviewed entries found.")
+        else:
+            md_parts.append(f"*Found {len(results)}. Copy desired Accession ID and paste below.*\n---")
+            for entry in results:
+                acc = entry.get("primaryAccession", "N/A"); protein_name = "N/A"
+                if entry.get("proteinDescription", {}).get("recommendedName", {}).get("fullName", {}).get("value"):
+                    protein_name = entry["proteinDescription"]["recommendedName"]["fullName"]["value"]
+                elif entry.get("proteinDescription", {}).get("submissionNames"): protein_name = entry["proteinDescription"]["submissionNames"][0].get("fullName",{}).get("value", "N/A")
+                organism = entry.get("organism", {}).get("scientificName", "N/A"); uniprot_id_display = entry.get("uniProtkbId", "")
+                md_parts.append(f"- **{acc}** (`{uniprot_id_display}`): {protein_name} - *{organism}*")
+            md_parts.append("---")
+    except Exception as e: md_parts.append(f"\n**Search Error:** {e}")
+    return "\n".join(md_parts)
+
 def get_protein_info(uniprot_id):
     empty_plot = gr.update(value=None, visible=False); empty_str = ""; err_msg = "Error"
-    outputs_on_error = (err_msg, empty_plot, empty_plot, empty_str, 
-                        empty_str, empty_str, empty_str, empty_str, empty_str) 
+    outputs_on_error = (err_msg, empty_plot, empty_plot, empty_str, empty_str, empty_str, empty_str, empty_str, empty_str) 
     if not uniprot_id: return ("Enter UniProt ID.",) + outputs_on_error[1:]
     
     url = UNIPROT_API_URL.format(accession=uniprot_id.strip().upper())
@@ -260,22 +279,32 @@ def get_protein_info(uniprot_id):
                 if clean_seq: mw_str = f"{molecular_weight(clean_seq, seq_type='protein'):.2f} Da"
                 else: mw_str = "Invalid sequence for MW"
             except: mw_str = "Error in MW calc"
-        comments_data = data.get("comments", []); func_comment = "N/A" 
-        for c_item in comments_data:
-            if c_item.get("commentType") == "FUNCTION": texts = c_item.get("texts", []);
-                if texts: func_comment = texts[0].get("value", "N/A"); break
         
+        # --- Corrected Indentation for Function Comment Extraction ---
+        comments_data = data.get("comments", [])
+        func_comment = "N/A" 
+        for c_item in comments_data:
+            if c_item.get("commentType") == "FUNCTION": 
+                texts = c_item.get("texts", []) 
+                if texts: 
+                    func_comment = texts[0].get("value", "N/A") # Correct indentation
+                    break # Correct indentation
+        # --- End Corrected Indentation ---
+
         overview_md = (f"## {id_display} ({acc})\n[{acc} on UniProt]({link})\n\n**Protein:** {name}\n**Gene:** {gene_str}\n**Status:** {status_val}\n"
                        f"**Organism:** {org_display}\n**Length:** {length} aa\n**Existence:** {existence_val}\n**Score:** {score_val}/5\n**Calc. MW:** {mw_str}\n\n"
                        f"**Function Snippet:**\n{func_comment}\n\n**Sequence (first 100 aa):**\n`{seq_val[:100]}{'...' if len(seq_val) > 100 else ''}`\n\n--- \n*More details in other tabs.*")
+        
         interactions_md = extract_interactions(data); pathways_md = extract_pathways(data)
         disease_md = extract_disease_info(data); publications_md = extract_publications(data)
         xref_md = extract_cross_references(data) 
+
         aa_freq, aa_err = get_amino_acid_frequencies(seq_val); aa_plot_upd = empty_plot
         if aa_err: overview_md += f"\n\n**AA Freq Error:** {aa_err}"
         elif aa_freq:
             img_aa = plot_amino_acid_frequencies(aa_freq);
             if img_aa: aa_plot_upd = gr.update(value=img_aa, visible=True)
+        
         seq_feat = extract_sequence_features(data); feat_plot_upd = empty_plot; feat_msg = ""
         if seq_feat and length > 0:
             img_feat = plot_sequence_features(length, seq_feat)
@@ -283,7 +312,9 @@ def get_protein_info(uniprot_id):
             else: feat_msg = "Could not generate feature plot."
         elif not seq_feat and length > 0 : feat_msg = "No relevant features found for plotting."
         
-        return (overview_md, aa_plot_upd, feat_plot_upd, feat_msg, pathways_md, interactions_md, disease_md, publications_md, xref_md)
+        return (overview_md, aa_plot_upd, feat_plot_upd, feat_msg, 
+                pathways_md, interactions_md, disease_md, publications_md, xref_md)
+
     except requests.exceptions.HTTPError as e: 
         err_msg_http = f"Error: ID '{uniprot_id}' not found." if e.response.status_code == 404 else f"HTTP error: {e}"
         return (err_msg_http,) + outputs_on_error[1:]
@@ -291,7 +322,7 @@ def get_protein_info(uniprot_id):
         return (f"Error: {str(e)[:150]}",) + outputs_on_error[1:]
 
 with gr.Blocks(theme=gr.themes.Glass()) as iface:
-    gr.Markdown("# Protein Profile Viewer (v1.5.1 - Syntax Fix)") # Updated version
+    gr.Markdown("# Protein Profile Viewer (v1.5.2 - Final Fixes)") # Version updated
     gr.Markdown("Enter a UniProt ID directly, **OR** search for a protein/gene name below to find its ID first.")
     with gr.Group():
         gr.Markdown("### Find UniProt ID by Name/Keyword")

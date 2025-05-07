@@ -99,7 +99,7 @@ def plot_sequence_features(sequence_length, features):
     img = Image.open(buf); plt.close(fig)
     return img
 
-def get_pdb_id(uniprot_data): # Removed debug_markdown_list_ref for cleaner final version
+def get_pdb_id(uniprot_data):
     pdb_id = None
     if "uniProtKBCrossReferences" in uniprot_data:
         for xref in uniprot_data["uniProtKBCrossReferences"]:
@@ -115,7 +115,6 @@ def get_protein_info(uniprot_id):
     try:
         response = requests.get(url); response.raise_for_status(); uniprot_api_data = response.json()
         primary_accession = uniprot_api_data.get("primaryAccession", "N/A")
-        # ... (Rest of protein info extraction - same as before)
         protein_data_dict = uniprot_api_data.get("proteinDescription", {}).get("recommendedName", {})
         protein_name = protein_data_dict.get("fullName", {}).get("value", "N/A")
         if protein_name == "N/A" and uniprot_api_data.get("proteinDescription", {}).get("submissionNames"):
@@ -171,18 +170,20 @@ def get_protein_info(uniprot_id):
         pdb_viewer_html_update = gr.update(value=None, visible=False)
         
         if pdb_id:
-            safe_pdb_id_for_html = pdb_id.lower().replace('.', '_') # Make ID HTML-safe for JS function names
+            safe_pdb_id_for_html = pdb_id.lower().replace('.', '_') 
             ngl_div_id = f"ngl_viewport_{safe_pdb_id_for_html}"
             
-            # JavaScript for NGL with in-div error/status reporting
             script_js = f"""
             function logToDiv(divId, message, isError) {{
                 var el = document.getElementById(divId);
                 if (el) {{
                     var p = document.createElement('p');
                     p.style.color = isError ? 'red' : 'blue';
+                    p.style.margin = '2px'; p.style.padding = '0'; // Minimal spacing
                     p.textContent = message;
-                    // el.innerHTML = ''; // Clear previous messages
+                    if (el.firstChild && el.firstChild.textContent.startsWith("Initializing")) {{
+                        el.innerHTML = ''; // Clear "Initializing..." message only on first log
+                    }}
                     el.appendChild(p);
                 }}
             }}
@@ -210,9 +211,9 @@ def get_protein_info(uniprot_id):
                         if (component) {{
                             logToDiv(targetDivId, "PDB component {pdb_id.upper()} loaded. Auto-viewing.", false);
                             component.autoView();
-                            // Clear all debug messages if successful by setting innerHTML to empty
-                            // Or keep them for verification. For now, let's keep them to see the process.
-                            // document.getElementById(targetDivId).innerHTML = ''; // Optional: clear div if successful
+                            // Clear all messages if successful by finding the div and setting its innerHTML
+                            var finalDiv = document.getElementById(targetDivId);
+                            if(finalDiv) finalDiv.innerHTML = ''; // Clears the div, stage will repaint
                         }} else {{
                             logToDiv(targetDivId, "NGL Error: PDB component for {pdb_id.upper()} was not loaded.", true);
                         }}
@@ -225,9 +226,7 @@ def get_protein_info(uniprot_id):
                     let resizeTimeout;
                     function handleResize() {{
                         clearTimeout(resizeTimeout);
-                        resizeTimeout = setTimeout(function() {{
-                            if (stage) stage.handleResize();
-                        }}, 200);
+                        resizeTimeout = setTimeout(function() {{ if (stage) stage.handleResize(); }}, 200);
                     }}
                     var resizeHandlerKey = "nglResizeHandler_{safe_pdb_id_for_html}";
                     if (window[resizeHandlerKey]) window.removeEventListener("resize", window[resizeHandlerKey]);
@@ -239,30 +238,31 @@ def get_protein_info(uniprot_id):
                 }}
             }}
 
-            var nglScriptTag = document.getElementById("ngl_script_tag_{safe_pdb_id_for_html}");
-            if (!nglScriptTag) {{ // Load NGL script only if not already loaded by a previous call
+            var nglScriptId = "ngl_script_main_tag"; // Use a generic ID for the script tag itself
+            var nglScriptTag = document.getElementById(nglScriptId);
+            if (!nglScriptTag) {{ 
                 var nglScript = document.createElement('script');
-                nglScript.id = "ngl_script_tag_{safe_pdb_id_for_html}"; // Give it an ID
-                nglScript.src = "https://cdn.jsdelivr.net/npm/ngl@2.0.0-rc.1/dist/ngl.js";
+                nglScript.id = nglScriptId; 
+                nglScript.src = "https://unpkg.com/ngl@2.0.0-rc.1/dist/ngl.js"; // CDN Changed to unpkg
                 nglScript.onload = function() {{
-                    logToDiv("{ngl_div_id}", "NGL script loaded successfully.", false);
+                    logToDiv("{ngl_div_id}", "NGL script from unpkg.com loaded successfully.", false);
                     initNGLViewer_{safe_pdb_id_for_html}();
                 }};
                 nglScript.onerror = function() {{
-                    logToDiv("{ngl_div_id}", "Failed to load NGL script (ngl.js).", true);
+                    logToDiv("{ngl_div_id}", "Failed to load NGL script from unpkg.com.", true);
                 }};
                 document.head.appendChild(nglScript);
-            }} else {{ // If script tag exists, NGL might be loaded or loading
+            }} else {{ 
                  if (typeof NGL !== 'undefined') {{
+                    logToDiv("{ngl_div_id}", "NGL script already loaded. Initializing viewer.", false);
                     initNGLViewer_{safe_pdb_id_for_html}();
-                 }} else {{ // Still loading, wait for DOMContentLoaded as a fallback
+                 }} else {{ 
+                    logToDiv("{ngl_div_id}", "NGL script tag exists but NGL object not ready. Waiting for DOMContentLoaded.", false);
                     document.addEventListener('DOMContentLoaded', initNGLViewer_{safe_pdb_id_for_html});
                  }}
             }}
             """
-            # The div where NGL will be rendered, also used for status messages
-            viewer_div_html = f'<div id="{ngl_div_id}" style="width:100%; height:450px; border:1px solid #ccc; overflow-y: auto; font-family: monospace; font-size: 10px;">Initializing 3D Viewer for {pdb_id.upper()}...</div>'
-            
+            viewer_div_html = f'<div id="{ngl_div_id}" style="width:100%; height:450px; border:1px solid #ccc; overflow-y: auto; font-family: monospace; font-size: 10px; padding: 5px;">Initializing 3D Viewer for {pdb_id.upper()}...</div>'
             pdb_viewer_html_update = gr.update(value=viewer_div_html + f"<script>{script_js}</script>", visible=True)
             markdown_parts.append(f"\n\n**3D Structure (PDB ID: {pdb_id.upper()}):**")
         else:
@@ -284,14 +284,14 @@ outputs_list = [
     gr.Markdown(label="Protein Information"),
     gr.Image(label="Amino Acid Frequency Plot", type="pil", show_label=True, visible=False),
     gr.Image(label="Sequence Features Plot", type="pil", show_label=True, visible=False),
-    gr.HTML(label="3D Structure Viewer", visible=False) # This will display the div and run the script
+    gr.HTML(label="3D Structure Viewer", visible=False)
 ]
 iface = gr.Interface(
     fn=get_protein_info,
     inputs=gr.Textbox(label="Enter UniProt ID (e.g., P05067 or INS_HUMAN)", placeholder="e.g., P0DP23"),
     outputs=outputs_list,
-    title="Protein Profile Viewer (v0.6.3 - In-Div NGL Debug)", 
-    description="Enter a UniProt ID. 3D viewer will attempt to display status/errors in its own panel.",
+    title="Protein Profile Viewer (v0.6.4 - NGL CDN Test)", 
+    description="Enter a UniProt ID. Testing NGL from unpkg.com.",
     examples=[["P05067"], ["1A00"], ["6M0J"], ["P00533"], ["Q9BYF1"], ["P0DP23"]],
     flagging_options=None 
 )

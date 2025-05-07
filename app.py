@@ -114,7 +114,7 @@ def extract_interactions(uniprot_data):
                             partner_display_name = f"{interactant_two_gene} ({interactant_two_acc})"
                         interactions_list.append(f"- Interacts with: **{partner_display_name}**")
     if not interactions_list:
-        return "No specific interaction partners listed in comments."
+        return "No specific interaction partners listed in UniProt comments."
     return "\n".join(interactions_list)
 
 def extract_pathways(uniprot_data):
@@ -144,17 +144,19 @@ def extract_pathways(uniprot_data):
 
 def get_protein_info(uniprot_id):
     empty_plot_update = gr.update(value=None, visible=False); empty_str = ""
-    default_error_msg_plots = "Error fetching data for plots."
-    default_error_msg_text = "Error fetching data."
+    default_error_msg = "Error fetching or processing data."
 
     if not uniprot_id:
         return ("Please enter a UniProt ID.", empty_plot_update, empty_plot_update, 
-                empty_str, "No interactions to display.", "No pathways to display.")
+                empty_str, "No data to display.", "No data to display.")
     
     url = UNIPROT_API_URL.format(accession=uniprot_id.strip().upper())
     try:
         response = requests.get(url); response.raise_for_status(); uniprot_api_data = response.json()
+        
         primary_accession = uniprot_api_data.get("primaryAccession", "N/A")
+        uniprot_link = f"https://www.uniprot.org/uniprotkb/{primary_accession}/entry"
+        
         protein_data_dict = uniprot_api_data.get("proteinDescription", {}).get("recommendedName", {})
         protein_name = protein_data_dict.get("fullName", {}).get("value", "N/A")
         if protein_name == "N/A" and uniprot_api_data.get("proteinDescription", {}).get("submissionNames"):
@@ -183,7 +185,7 @@ def get_protein_info(uniprot_id):
                 if function_texts: function_comment_en = function_texts[0].get("value", "N/A"); break
         
         overview_md = (
-            f"**Primary Accession:** {primary_accession}\n"
+            f"**Primary Accession:** {primary_accession} ([View on UniProt]({uniprot_link}))\n" # Added UniProt link
             f"**Protein Name:** {protein_name}\n"
             f"**Gene Name(s):** {gene_name_str}\n"
             f"**Organism:** {organism_name}\n"
@@ -192,14 +194,17 @@ def get_protein_info(uniprot_id):
             f"**Function Snippet:**\n{function_comment_en}\n\n"
             f"**Amino Acid Sequence (first 100 residues):**\n`{sequence[:100]}{'...' if len(sequence) > 100 else ''}`"
         )
+        
         interactions_md = extract_interactions(uniprot_api_data)
         pathways_md = extract_pathways(uniprot_api_data)
+
         aa_frequencies, freq_error = get_amino_acid_frequencies(sequence)
         aa_plot_update = empty_plot_update
         if freq_error: overview_md += f"\n\n**AA Freq. Analysis Error:** {freq_error}"
         elif aa_frequencies:
             pil_image_aa = plot_amino_acid_frequencies(aa_frequencies)
             if pil_image_aa: aa_plot_update = gr.update(value=pil_image_aa, visible=True)
+        
         seq_features = extract_sequence_features(uniprot_api_data) 
         feature_plot_update = empty_plot_update; features_plot_message = ""
         if seq_features and length > 0:
@@ -208,23 +213,25 @@ def get_protein_info(uniprot_id):
             else: features_plot_message = "Could not generate sequence feature plot."
         elif not seq_features and length > 0 : features_plot_message = "No relevant features found for plotting."
         
-        return overview_md, aa_plot_update, feature_plot_update, features_plot_message, interactions_md, pathways_md
+        return overview_md, aa_plot_update, feature_plot_update, features_plot_message, pathways_md, interactions_md
 
     except requests.exceptions.HTTPError as http_err: 
         status_code = http_err.response.status_code if http_err.response is not None else "N/A"
         err_msg = f"Error: Protein ID '{uniprot_id}' not found." if status_code == 404 else f"HTTP error: {http_err}"
-        return err_msg, empty_plot_update, empty_plot_update, default_error_msg_plots, default_error_msg_text, default_error_msg_text
+        return err_msg, empty_plot_update, empty_plot_update, default_error_msg, default_error_msg, default_error_msg
     except requests.exceptions.RequestException as req_err:
-        return f"Network error: {req_err}", empty_plot_update, empty_plot_update, default_error_msg_plots, default_error_msg_text, default_error_msg_text
+        return f"Network error: {req_err}", empty_plot_update, empty_plot_update, default_error_msg, default_error_msg, default_error_msg
     except Exception as e:
-        return f"Unexpected error: {str(e)[:150]}", empty_plot_update, empty_plot_update, default_error_msg_plots, default_error_msg_text, default_error_msg_text
+        return f"Unexpected error: {str(e)[:150]}", empty_plot_update, empty_plot_update, default_error_msg, default_error_msg, default_error_msg
 
 with gr.Blocks(theme=gr.themes.Soft()) as iface:
-    gr.Markdown("# Protein Profile Viewer (v1.0 - Pathways Added)")
-    gr.Markdown("Enter a UniProt ID to display its basic information, sequence analysis, interactions, and biological pathways.")
+    gr.Markdown("# Protein Profile Viewer (v1.1 - UI/Data Order Impr.)")
+    gr.Markdown("Enter a UniProt ID to display its basic information, sequence analysis, pathways, and interactions.")
+    
     with gr.Row():
         protein_id_input = gr.Textbox(label="Enter UniProt ID (e.g., P05067 or P00533)", placeholder="e.g., P0DP23", scale=3)
         submit_button = gr.Button("Submit", scale=1, variant="primary")
+
     with gr.Tabs():
         with gr.TabItem("Overview & Sequence"):
             overview_output = gr.Markdown(label="Protein Information")
@@ -233,17 +240,17 @@ with gr.Blocks(theme=gr.themes.Soft()) as iface:
                 aa_freq_plot_output = gr.Image(label="Amino Acid Frequency Plot", type="pil", show_label=True, visible=False)
                 seq_features_plot_output = gr.Image(label="Sequence Features Plot", type="pil", show_label=True, visible=False)
                 seq_features_message_output = gr.Markdown() 
-        with gr.TabItem("Interactions & Pathways"):
-            with gr.Row():
-                with gr.Column(scale=1):
-                    interactions_output = gr.Markdown(label="Protein Interactions")
-                with gr.Column(scale=1):
-                    pathways_output = gr.Markdown(label="Biological Pathways (KEGG, Reactome)")
+        with gr.TabItem("Pathways & Interactions"): # Renamed Tab
+            with gr.Column(): # Using a single column for now for simplicity, can be changed to Row
+                pathways_output = gr.Markdown(label="Biological Pathways (KEGG, Reactome)") # Pathways first
+                interactions_output = gr.Markdown(label="Protein Interactions") # Then interactions
+
     submit_button.click(
         fn=get_protein_info,
         inputs=protein_id_input,
-        outputs=[overview_output, aa_freq_plot_output, seq_features_plot_output, seq_features_message_output, interactions_output, pathways_output]
+        outputs=[overview_output, aa_freq_plot_output, seq_features_plot_output, seq_features_message_output, pathways_output, interactions_output]
     )
+    
     gr.Examples(
         examples=[["P05067"], ["P00533"], ["Q9BYF1"], ["P0DP23"], ["P04637"]],
         inputs=protein_id_input

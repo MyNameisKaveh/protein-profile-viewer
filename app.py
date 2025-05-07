@@ -50,7 +50,7 @@ def plot_sequence_features(sequence_length, features):
         begin = feature["begin"]; end = feature["end"]; color = feature["color"]
         width = max(1, end - begin + 1) 
         ax.barh(y_pos_counter, width, height=bar_height, left=begin -1, color=color, edgecolor='black', alpha=0.7)
-        if feature['type'] not in plotted_feature_types_in_legend:
+        if feature['type'] not in plotted_feature_types_in_legend: # Use the original (case-sensitive) type for legend keys
             legend_handles[feature['type']] = plt.Rectangle((0, 0), 1, 1, fc=color, alpha=0.7)
             plotted_feature_types_in_legend.add(feature['type'])
         y_pos_counter += 1 
@@ -62,92 +62,75 @@ def plot_sequence_features(sequence_length, features):
     img = Image.open(buf); plt.close(fig)
     return img
 
-# ------------------- START OF DEEPEST DEBUG extract_sequence_features -------------------
-def extract_sequence_features(uniprot_data, debug_markdown_list_ref):
-    features_of_interest = {
+# ------------------- START OF FINAL CORRECTED extract_sequence_features -------------------
+def extract_sequence_features(uniprot_data, debug_markdown_list_ref): # debug_markdown_list_ref can be removed if not needed
+    """
+    Extracts and categorizes sequence features from UniProt data.
+    Corrected for case-insensitivity and robust location parsing.
+    """
+    # features_of_interest keys are UPPERCASE for case-insensitive matching
+    features_of_interest_uppercase = {
         "DOMAIN": "blue", "MOTIF": "green", "ACTIVE_SITE": "red",
         "BINDING_SITE": "orange", "MOD_RES": "purple", 
         "HELIX": "cyan", "STRAND": "magenta", "TURN": "gold"
     }
     extracted_features = []
     
-    debug_markdown_list_ref.append("\n\n--- FEATURE EXTRACTION DEBUG (v4 - Deepest String Check) ---\n")
-    
+    # Optional: Add a header for debug if you keep the debug list
+    # debug_markdown_list_ref.append("\n\n--- FEATURE EXTRACTION (v5 - Case Corrected) ---\n")
+
     if "features" in uniprot_data and uniprot_data["features"] is not None:
-        debug_markdown_list_ref.append(f"Found 'features' key with {len(uniprot_data['features'])} items.\n")
-        
-        logged_relevant_details = 0
-        max_relevant_to_log = 10 # Increase logging for relevant types
-
-        for i, feature_item in enumerate(uniprot_data["features"]):
-            feature_type_raw = feature_item.get("type") # Get the raw type
+        for feature_item in uniprot_data["features"]:
+            feature_type_raw = feature_item.get("type")
             
-            # Always log the raw type and its repr for the first few overall features
-            if i < 5: # Log first 5 raw features and their types
-                 debug_markdown_list_ref.append(f"\n**Raw Feature Index {i}:**\n")
-                 debug_markdown_list_ref.append(f"- Raw `feature_type`: '{feature_type_raw}'\n")
-                 debug_markdown_list_ref.append(f"- `repr(feature_type_raw)`: {repr(feature_type_raw)}\n")
-                 # Check against a known key from features_of_interest
-                 is_domain = (feature_type_raw == "DOMAIN")
-                 debug_markdown_list_ref.append(f"- Is `feature_type_raw == \"DOMAIN\"`? {is_domain}\n")
-                 is_in_foi = (feature_type_raw in features_of_interest)
-                 debug_markdown_list_ref.append(f"- Is `feature_type_raw in features_of_interest`? {is_in_foi}\n")
+            if not isinstance(feature_type_raw, str): # Skip if type is not a string
+                continue
 
+            feature_type_normalized = feature_type_raw.strip().upper() # Normalize to UPPERCASE and strip whitespace
 
-            # Normalize the feature_type by stripping whitespace
-            feature_type = None
-            if isinstance(feature_type_raw, str):
-                feature_type = feature_type_raw.strip() # Strip whitespace
+            if feature_type_normalized in features_of_interest_uppercase:
+                try:
+                    location_obj = feature_item.get("location", {})
+                    begin_pos_val_str = None; end_pos_val_str = None
 
-            if feature_type in features_of_interest:
-                # Log details if it's a relevant type and we haven't logged too many
-                log_this_detail = False
-                if logged_relevant_details < max_relevant_to_log:
-                    log_this_detail = True
-                    logged_relevant_details += 1
-                    debug_markdown_list_ref.append(f"\n**Processing Relevant Feature (Index {i}, Type: '{feature_type}' - Original: '{feature_type_raw}'):**\n")
-                    debug_markdown_list_ref.append(f"```json\nLocation Object: {json.dumps(feature_item.get('location', {}), indent=2)}\n```\n")
+                    start_node = location_obj.get("start")
+                    end_node = location_obj.get("end")
+                    position_node = location_obj.get("position")
 
-                # --- Core extraction logic (copied from previous attempt, should be okay if type matches) ---
-                location_obj = feature_item.get("location", {})
-                begin_pos_val_str = None; end_pos_val_str = None
-                start_node = location_obj.get("start"); end_node = location_obj.get("end")
-                position_node = location_obj.get("position")
-                if start_node and isinstance(start_node, dict) and "value" in start_node: begin_pos_val_str = str(start_node["value"])
-                if end_node and isinstance(end_node, dict) and "value" in end_node: end_pos_val_str = str(end_node["value"])
-                if position_node and isinstance(position_node, dict) and "value" in position_node:
-                    pos_val_str = str(position_node["value"])
-                    if begin_pos_val_str is None: begin_pos_val_str = pos_val_str
-                    if end_pos_val_str is None: end_pos_val_str = pos_val_str
-                    if "start" not in location_obj and "end" not in location_obj:
-                         begin_pos_val_str = pos_val_str; end_pos_val_str = pos_val_str
-                
-                if log_this_detail: debug_markdown_list_ref.append(f"- Values read for position: `begin_str`='{begin_pos_val_str}', `end_str`='{end_pos_val_str}'\n")
-                if begin_pos_val_str and end_pos_val_str:
-                    try:
-                        begin_pos = int(begin_pos_val_str); end_pos = int(end_pos_val_str)
-                        if log_this_detail: debug_markdown_list_ref.append(f"- Values after int: `begin_pos`={begin_pos}, `end_pos`={end_pos}\n")
-                        if begin_pos <= end_pos:
-                            extracted_features.append({
-                                "type": feature_type, "begin": begin_pos, "end": end_pos,
-                                "description": feature_item.get("description", feature_type), 
-                                "color": features_of_interest[feature_type]
-                            })
-                            if log_this_detail: debug_markdown_list_ref.append(f"-> **Result: ADDED**\n")
-                        elif log_this_detail: debug_markdown_list_ref.append(f"-> **Result: SKIPPED (begin > end)**\n")
-                    except ValueError as ve:
-                        if log_this_detail: debug_markdown_list_ref.append(f"-> **Result: SKIPPED (ValueError: {ve})**\n")
-                elif log_this_detail: debug_markdown_list_ref.append(f"-> **Result: SKIPPED (str is None)**\n")
-            
-        debug_markdown_list_ref.append(f"\nFinished iterating. Total extracted of interest: {len(extracted_features)}\n")
-    else:
-        debug_markdown_list_ref.append("'features' key not found or is None in uniprot_data.\n")
-    debug_markdown_list_ref.append("--- END OF FEATURE EXTRACTION DEBUG (v4) ---\n")
+                    if start_node and isinstance(start_node, dict) and "value" in start_node:
+                        begin_pos_val_str = str(start_node["value"])
+                    if end_node and isinstance(end_node, dict) and "value" in end_node:
+                        end_pos_val_str = str(end_node["value"])
+                    
+                    if position_node and isinstance(position_node, dict) and "value" in position_node:
+                        pos_val_str = str(position_node["value"])
+                        if begin_pos_val_str is None: begin_pos_val_str = pos_val_str
+                        if end_pos_val_str is None: end_pos_val_str = pos_val_str # Use for end if it's missing
+                        # If it was truly a single position, make start and end the same
+                        if "start" not in location_obj and "end" not in location_obj:
+                             begin_pos_val_str = pos_val_str
+                             end_pos_val_str = pos_val_str
+                    
+                    if begin_pos_val_str is None or end_pos_val_str is None:
+                        continue
+
+                    begin_pos = int(begin_pos_val_str)
+                    end_pos = int(end_pos_val_str)
+
+                    if begin_pos > end_pos:
+                        continue
+                        
+                    extracted_features.append({
+                        "type": feature_type_raw, # Store the original case for display/legend if needed
+                        "begin": begin_pos, "end": end_pos,
+                        "description": feature_item.get("description", feature_type_raw), 
+                        "color": features_of_interest_uppercase[feature_type_normalized]
+                    })
+                except (ValueError, TypeError, AttributeError):
+                    continue 
     return extracted_features
-# ------------------- END OF DEEPEST DEBUG extract_sequence_features -------------------
+# ------------------- END OF FINAL CORRECTED extract_sequence_features -------------------
 
-# --- تابع get_protein_info و بقیه کد بدون تغییر نسبت به پاسخ قبلی ---
-# ... (کد کامل get_protein_info و UI از پاسخ قبلی که شامل `markdown_parts` بود، اینجا کپی شود) ...
 def get_protein_info(uniprot_id):
     if not uniprot_id:
         return "Please enter a UniProt ID.", gr.update(value=None, visible=False), gr.update(value=None, visible=False)
@@ -181,43 +164,46 @@ def get_protein_info(uniprot_id):
             if comment.get("commentType") == "FUNCTION":
                 function_texts = comment.get("texts", [])
                 if function_texts: function_comment_en = function_texts[0].get("value", "N/A"); break
-        markdown_parts = [
+        
+        markdown_parts = [ # Using a list for easier construction
             f"**Primary Accession:** {primary_accession}\n", f"**Protein Name:** {protein_name}\n",
             f"**Gene Name(s):** {gene_name_str}\n", f"**Organism:** {organism_name}\n",
             f"**Sequence Length:** {length} amino acids\n", f"**Molecular Weight (calculated):** {calculated_mol_weight_str}\n\n",
             f"**Function Snippet:**\n{function_comment_en}\n\n",
             f"**Amino Acid Sequence (first 100 residues):**\n`{sequence[:100]}{'...' if len(sequence) > 100 else ''}`"
         ]
-        markdown_parts.append(f"\n\n--- GENERAL DEBUG INFO ---\n") # Moved here to be before detailed feature debug
-        markdown_parts.append(f"**Raw features from API count:** {len(uniprot_api_data.get('features', []))}\n")
-        if uniprot_api_data.get('features'):
-            raw_feature_types_counts = Counter([f.get('type', 'UNKNOWN_TYPE') for f in uniprot_api_data['features']])
-            markdown_parts.append(f"**Raw feature types found (Counts):** {dict(raw_feature_types_counts)}\n") # Show counts
         
-        seq_features = extract_sequence_features(uniprot_api_data, markdown_parts) # markdown_parts is passed and appended to
+        # No more debug output to markdown_parts from here, extract_sequence_features will do its job
+        # debug_markdown_list_ref can be removed from extract_sequence_features if no longer needed
+        # For now, we pass an empty list if we don't want that specific debug output in the UI
+        temp_debug_list = [] # Or remove this and the argument from extract_sequence_features
+        seq_features = extract_sequence_features(uniprot_api_data, temp_debug_list) 
         
-        # These lines will now appear after the detailed debug from extract_sequence_features
-        markdown_parts.append(f"\n--- GENERAL DEBUG SUMMARY (after detailed extract attempt) ---\n")
-        markdown_parts.append(f"**Final Extracted features of interest count:** {len(seq_features)}\n")
-        if seq_features:
-            extracted_feature_types_summary_counts = Counter([f['type'] for f in seq_features])
-            markdown_parts.append(f"**Final Extracted feature types (of interest) counts:** {dict(extracted_feature_types_summary_counts)}\n")
-        markdown_parts.append(f"--- END GENERAL DEBUG SUMMARY ---\n")
-        
+        # If you want to see the debug output in the UI, uncomment these lines:
+        # if temp_debug_list:
+        #     markdown_parts.extend(temp_debug_list)
+        # markdown_parts.append(f"\n\n**Final Extracted features of interest count:** {len(seq_features)}\n")
+        # if seq_features:
+        #     extracted_feature_types_summary_counts = Counter([f['type'] for f in seq_features]) # Use original type for counting
+        #     markdown_parts.append(f"**Final Extracted feature types (of interest) counts:** {dict(extracted_feature_types_summary_counts)}\n")
+
         aa_frequencies, freq_error = get_amino_acid_frequencies(sequence)
         aa_plot_update = gr.update(value=None, visible=False)
         if freq_error: markdown_parts.append(f"\n\n**Amino Acid Frequency Analysis:** {freq_error}")
         elif aa_frequencies:
             pil_image_aa = plot_amino_acid_frequencies(aa_frequencies)
             if pil_image_aa: aa_plot_update = gr.update(value=pil_image_aa, visible=True)
+        
         feature_plot_update = gr.update(value=None, visible=False)
         if seq_features and length > 0:
             pil_image_features = plot_sequence_features(length, seq_features)
             if pil_image_features: feature_plot_update = gr.update(value=pil_image_features, visible=True)
             else: markdown_parts.append("\n\n**Sequence Features:** Could not generate feature plot.")
         elif not seq_features and length > 0 : markdown_parts.append("\n\n**Sequence Features:** No features of the selected types found or feature data is unavailable.")
+        
         final_markdown = "".join(markdown_parts)
         return final_markdown, aa_plot_update, feature_plot_update
+
     except requests.exceptions.HTTPError as http_err: 
         status_code = http_err.response.status_code if http_err.response is not None else "N/A"
         error_message_en = f"Error: Protein with ID '{uniprot_id}' not found. Please check the ID." if status_code == 404 else f"HTTP error occurred: {http_err} (Status code: {status_code})"
@@ -236,8 +222,8 @@ iface = gr.Interface(
     fn=get_protein_info,
     inputs=gr.Textbox(label="Enter UniProt ID (e.g., P05067 or INS_HUMAN)", placeholder="e.g., P0DP23"),
     outputs=outputs_list,
-    title="Protein Profile Viewer (v0.4.7 - Deepest Debug)", 
-    description="Enter a UniProt ID. Deepest debug for features is active.",
+    title="Protein Profile Viewer (v0.5 - Feature Fix Attempt)", 
+    description="Enter a UniProt ID to display its basic information, amino acid frequency, and sequence features plot.",
     examples=[["P05067"], ["INS_HUMAN"], ["CYC_HUMAN"],["Q9BYF1"], ["P0DP23"], ["P00533"], ["P04637"]],
     flagging_options=None 
 )

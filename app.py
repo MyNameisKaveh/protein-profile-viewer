@@ -40,7 +40,7 @@ def plot_amino_acid_frequencies(frequencies):
     img = Image.open(buf); plt.close(fig)
     return img
 
-def extract_sequence_features(uniprot_data): # <<---- تعریف تابع با یک آرگومان
+def extract_sequence_features(uniprot_data):
     features_of_interest_uppercase = {
         "DOMAIN": "blue", "MOTIF": "green", "ACTIVE_SITE": "red",
         "BINDING_SITE": "orange", "MOD_RES": "purple", 
@@ -99,13 +99,29 @@ def plot_sequence_features(sequence_length, features):
     img = Image.open(buf); plt.close(fig)
     return img
 
-def get_pdb_id(uniprot_data):
+def get_pdb_id(uniprot_data, debug_markdown_list_ref): # Added debug_markdown_list_ref
     pdb_id = None
+    debug_markdown_list_ref.append("\n\n--- PDB ID EXTRACTION DEBUG ---\n")
     if "uniProtKBCrossReferences" in uniprot_data:
-        for xref in uniprot_data["uniProtKBCrossReferences"]:
-            if xref.get("database") == "PDB" and xref.get("id"):
-                pdb_id = xref.get("id")
-                break 
+        debug_markdown_list_ref.append(f"Found 'uniProtKBCrossReferences'. Number of XRefs: {len(uniprot_data['uniProtKBCrossReferences'])}\n")
+        for i, xref in enumerate(uniprot_data["uniProtKBCrossReferences"]):
+            if xref.get("database") == "PDB":
+                found_id = xref.get("id")
+                debug_markdown_list_ref.append(f"- XRef {i}: Database='PDB', ID='{found_id}'\n")
+                if found_id: # Take the first valid one found
+                    pdb_id = found_id
+                    debug_markdown_list_ref.append(f"-> **Selected PDB ID: {pdb_id}**\n")
+                    break 
+            # else:
+            #     if i < 10: # Log first few non-PDB XRefs for context
+            #         debug_markdown_list_ref.append(f"- XRef {i}: Database='{xref.get('database')}', ID='{xref.get('id')}' (Skipping)\n")
+
+    else:
+        debug_markdown_list_ref.append("Key 'uniProtKBCrossReferences' not found in UniProt data.\n")
+    
+    if not pdb_id:
+        debug_markdown_list_ref.append("No PDB ID found after checking all cross-references.\n")
+    debug_markdown_list_ref.append("--- END PDB ID EXTRACTION DEBUG ---\n")
     return pdb_id
 
 def get_protein_info(uniprot_id):
@@ -150,6 +166,9 @@ def get_protein_info(uniprot_id):
             f"**Amino Acid Sequence (first 100 residues):**\n`{sequence[:100]}{'...' if len(sequence) > 100 else ''}`"
         ]
         
+        # PDB ID Extraction and Debug
+        pdb_id = get_pdb_id(uniprot_api_data, markdown_parts) # Pass markdown_parts for debug output
+
         aa_frequencies, freq_error = get_amino_acid_frequencies(sequence)
         aa_plot_update = gr.update(value=None, visible=False)
         if freq_error: markdown_parts.append(f"\n\n**Amino Acid Frequency Analysis:** {freq_error}")
@@ -157,9 +176,8 @@ def get_protein_info(uniprot_id):
             pil_image_aa = plot_amino_acid_frequencies(aa_frequencies)
             if pil_image_aa: aa_plot_update = gr.update(value=pil_image_aa, visible=True)
         
-        # --- CORRECTED CALL TO extract_sequence_features ---
-        seq_features = extract_sequence_features(uniprot_api_data) 
-        # --- END OF CORRECTION ---
+        temp_debug_list_for_extract_features = [] 
+        seq_features = extract_sequence_features(uniprot_api_data) # Removed second argument
 
         feature_plot_update = gr.update(value=None, visible=False)
         if seq_features and length > 0:
@@ -168,43 +186,71 @@ def get_protein_info(uniprot_id):
             else: markdown_parts.append("\n\n**Sequence Features:** Could not generate feature plot.")
         elif not seq_features and length > 0 : markdown_parts.append("\n\n**Sequence Features:** No features of the selected types found or feature data is unavailable.")
         
-        pdb_id = get_pdb_id(uniprot_api_data)
         pdb_viewer_html_update = gr.update(value=None, visible=False)
         if pdb_id:
+            safe_pdb_id_for_html = pdb_id.lower().replace('.', '_') # Make ID HTML-safe
+            ngl_div_id = f"ngl_viewport_{safe_pdb_id_for_html}"
             iframe_html = f"""
-            <div id="ngl_viewport_{pdb_id.lower().replace('.', '_')}" style="width:100%; height:450px; border:1px solid #ccc;"></div>
+            <div id="{ngl_div_id}" style="width:100%; height:450px; border:1px solid #ccc;">Loading 3D Structure for {pdb_id.upper()}...</div>
             <script src="https://cdn.jsdelivr.net/npm/ngl@2.0.0-rc.1/dist/ngl.js"></script>
             <script>
-                document.addEventListener("DOMContentLoaded", function () {{
-                    var ngl_div_id = "ngl_viewport_{pdb_id.lower().replace('.', '_')}";
-                    var ngl_stage_element = document.getElementById(ngl_div_id);
-                    if (ngl_stage_element && typeof NGL !== 'undefined') {{
-                        var stage = new NGL.Stage(ngl_div_id);
-                        stage.loadFile("rcsb://{pdb_id.upper()}", {{defaultRepresentation: true, ext: "pdb"}})
-                        .then(function (o) {{
-                            o.autoView();
-                        }})
-                        .catch(function (e) {{
-                            console.error("NGL loadFile error for " + ngl_div_id + ":", e);
-                            ngl_stage_element.innerHTML = "<p style='color:red;'>Error loading PDB: {pdb_id.upper()}<br>" + e + "</p>";
-                        }});
-                        stage.setParameters({{backgroundColor: "white"}});
-                        function handleResize() {{ stage.handleResize(); }}
-                        window.addEventListener("resize", handleResize, false);
-                        // Delay initial resize slightly to ensure div is fully rendered
-                        setTimeout(handleResize, 100); 
-                    }} else if (!ngl_stage_element) {{
-                        console.error("NGL viewport div not found: " + ngl_div_id);
-                    }} else if (typeof NGL === 'undefined') {{
-                         console.error("NGL library not loaded.");
+            function initNGLViewer_{safe_pdb_id_for_html}() {{
+                var targetDiv = document.getElementById("{ngl_div_id}");
+                if (!targetDiv) {{ console.error("NGL div '{ngl_div_id}' not found."); return; }}
+                if (typeof NGL === 'undefined') {{
+                    console.error("NGL library not loaded.");
+                    targetDiv.innerHTML = "<p style='color:red;'>NGL library failed to load. Cannot display 3D structure.</p>";
+                    return;
+                }}
+                try {{
+                    var stage = new NGL.Stage("{ngl_div_id}");
+                    stage.loadFile("rcsb://{pdb_id.upper()}", {{ defaultRepresentation: true, ext: "pdb" }})
+                    .then(function (component) {{
+                        if (component) {{
+                            component.autoView();
+                            targetDiv.innerHTML = ''; // Clear loading message on success
+                        }} else {{
+                            targetDiv.innerHTML = "<p style='color:red;'>NGL Error: Could not load PDB component for {pdb_id.upper()}.</p>";
+                        }}
+                    }})
+                    .catch(function (error) {{
+                        console.error("NGL loadFile error for {pdb_id.upper()}:", error);
+                        targetDiv.innerHTML = "<p style='color:red;'>Error loading PDB: {pdb_id.upper()}.<br>Details: " + error.message + "</p>";
+                    }});
+                    stage.setParameters({{ backgroundColor: "white" }});
+                    
+                    // Resize handler
+                    let resizeTimeout;
+                    function handleResize() {{
+                        clearTimeout(resizeTimeout);
+                        resizeTimeout = setTimeout(function() {{
+                            if (stage) stage.handleResize();
+                        }}, 150);
                     }}
-                }});
+                    // Remove previous listener if any to avoid multiple listeners on re-submit
+                    if (window.nglResizeHandler_{safe_pdb_id_for_html}) {{
+                        window.removeEventListener("resize", window.nglResizeHandler_{safe_pdb_id_for_html});
+                    }}
+                    window.nglResizeHandler_{safe_pdb_id_for_html} = handleResize;
+                    window.addEventListener("resize", handleResize, false);
+                    setTimeout(handleResize, 250); // Initial resize after a small delay
+                }} catch (e) {{
+                    console.error("Error initializing NGL stage for {pdb_id.upper()}:", e);
+                    targetDiv.innerHTML = "<p style='color:red;'>Error initializing NGL for {pdb_id.upper()}: " + e.message + "</p>";
+                }}
+            }}
+            // Ensure NGL is loaded, then initialize
+            if (document.readyState === 'complete' || (document.readyState !== 'loading' && !document.documentElement.doScroll)) {{
+                initNGLViewer_{safe_pdb_id_for_html}();
+            }} else {{
+                document.addEventListener('DOMContentLoaded', initNGLViewer_{safe_pdb_id_for_html});
+            }}
             </script>
             """
             pdb_viewer_html_update = gr.update(value=iframe_html, visible=True)
             markdown_parts.append(f"\n\n**3D Structure (PDB ID: {pdb_id.upper()}):**")
         else:
-            markdown_parts.append("\n\n**3D Structure:** No PDB structure ID found in UniProt entry.")
+            markdown_parts.append("\n\n**3D Structure:** No PDB structure ID found or extracted.")
 
         final_markdown = "".join(markdown_parts)
         return final_markdown, aa_plot_update, feature_plot_update, pdb_viewer_html_update
@@ -229,8 +275,8 @@ iface = gr.Interface(
     fn=get_protein_info,
     inputs=gr.Textbox(label="Enter UniProt ID (e.g., P05067 or INS_HUMAN)", placeholder="e.g., P0DP23"),
     outputs=outputs_list,
-    title="Protein Profile Viewer (v0.6.1 - Arg Fix)", 
-    description="Enter a UniProt ID to display its basic information, amino acid frequency, sequence features, and 3D structure (if available).",
+    title="Protein Profile Viewer (v0.6.2 - PDB Debug)", 
+    description="Enter a UniProt ID to display its basic information, amino acid frequency, sequence features, and 3D structure (if available). PDB ID extraction debug is active.",
     examples=[["P05067"], ["1A00"], ["6M0J"], ["P00533"], ["Q9BYF1"], ["P0DP23"]],
     flagging_options=None 
 )

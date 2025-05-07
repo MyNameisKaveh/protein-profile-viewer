@@ -119,136 +119,143 @@ def extract_interactions(uniprot_data):
 
 def extract_pathways(uniprot_data):
     pathways = []
-    pathway_databases = {
-        "KEGG": "https://www.genome.jp/dbget-bin/www_bget?",
-        "Reactome": "https://reactome.org/content/detail/"
-    }
+    pathway_databases = { "KEGG": "https://www.genome.jp/dbget-bin/www_bget?", "Reactome": "https://reactome.org/content/detail/" }
     if "uniProtKBCrossReferences" in uniprot_data:
         for xref in uniprot_data["uniProtKBCrossReferences"]:
             db_name = xref.get("database")
             if db_name in pathway_databases:
-                pathway_id = xref.get("id")
-                pathway_description = ""
+                pathway_id = xref.get("id"); pathway_description = ""
                 if "properties" in xref:
                     for prop in xref["properties"]:
                         if prop.get("key") == "PathwayName" or prop.get("key") == "Description":
-                            pathway_description = prop.get("value")
-                            break
+                            pathway_description = prop.get("value"); break
                 if pathway_id:
                     link = pathway_databases[db_name] + pathway_id
                     display_text = f"{pathway_description} ({pathway_id})" if pathway_description else pathway_id
                     pathways.append(f"- [{display_text}]({link}) ({db_name})")
-    if not pathways:
-        return "No pathway information found in KEGG or Reactome cross-references."
+    if not pathways: return "No pathway information found in KEGG or Reactome cross-references."
     return "\n".join(sorted(list(set(pathways))))
 
-def get_protein_info(uniprot_id):
-    empty_plot_update = gr.update(value=None, visible=False); empty_str = ""
-    default_error_msg = "Error fetching or processing data."
+def extract_disease_info(uniprot_data):
+    disease_info_list = []
+    if "comments" in uniprot_data:
+        for comment in uniprot_data["comments"]:
+            if comment.get("commentType") == "DISEASE" and "disease" in comment:
+                disease_entry = comment["disease"]
+                disease_name = disease_entry.get("diseaseId", "Unknown disease")
+                description = disease_entry.get("description", "No description available.")
+                mim_id = None
+                if "diseaseCrossReference" in disease_entry and disease_entry["diseaseCrossReference"].get("database") == "MIM":
+                    mim_id = disease_entry["diseaseCrossReference"].get("id")
+                disease_md = f"**{disease_name}**"
+                if mim_id: disease_md += f" (MIM: [{mim_id}](https://www.omim.org/entry/{mim_id}))"
+                disease_md += f"\n   - *Description:* {description}\n"
+                if "note" in comment and "texts" in comment["note"]:
+                    for note_text_obj in comment["note"]["texts"]:
+                        note_val = note_text_obj.get("value")
+                        if note_val: disease_md += f"   - *Note:* {note_val}\n"
+                disease_info_list.append(disease_md)
+    if not disease_info_list: return "No specific disease association information found in UniProt comments."
+    return "\n---\n".join(disease_info_list)
 
+def get_protein_info(uniprot_id):
+    empty_plot = gr.update(value=None, visible=False); empty_str = ""; err_msg_default = "Error fetching or processing data."
     if not uniprot_id:
-        return ("Please enter a UniProt ID.", empty_plot_update, empty_plot_update, 
-                empty_str, "No data to display.", "No data to display.")
+        return ("Please enter a UniProt ID.", empty_plot, empty_plot, 
+                empty_str, empty_str, empty_str, empty_str)
     
     url = UNIPROT_API_URL.format(accession=uniprot_id.strip().upper())
     try:
-        response = requests.get(url); response.raise_for_status(); uniprot_api_data = response.json()
-        
-        primary_accession = uniprot_api_data.get("primaryAccession", "N/A")
-        uniprot_link = f"https://www.uniprot.org/uniprotkb/{primary_accession}/entry"
-        
-        protein_data_dict = uniprot_api_data.get("proteinDescription", {}).get("recommendedName", {})
-        protein_name = protein_data_dict.get("fullName", {}).get("value", "N/A")
-        if protein_name == "N/A" and uniprot_api_data.get("proteinDescription", {}).get("submissionNames"):
-            protein_name = uniprot_api_data["proteinDescription"]["submissionNames"][0].get("fullName", {}).get("value", "N/A")
-        gene_names_data = uniprot_api_data.get("genes"); gene_name_str = "N/A"
-        if gene_names_data:
-            gene_names_list = [g.get("geneName", {}).get("value", "") for g in gene_names_data if g.get("geneName")]
-            if not gene_names_list: gene_names_list = [g.get("orfNames", [{}])[0].get("value", "") for g in gene_names_data if g.get("orfNames")]
-            gene_name_str = ", ".join(filter(None, gene_names_list)) or "N/A"
-        organism_data = uniprot_api_data.get("organism", {}); organism_name = organism_data.get("scientificName", "N/A")
-        if organism_data.get("commonName"): organism_name += f" ({organism_data.get('commonName')})"
-        sequence_info = uniprot_api_data.get("sequence", {}); sequence = sequence_info.get("value", "N/A"); length = sequence_info.get("length", 0)
-        calculated_mol_weight_str = "N/A"
-        if sequence != "N/A" and length > 0:
+        response = requests.get(url); response.raise_for_status(); data = response.json()
+        acc = data.get("primaryAccession", "N/A"); link = f"https://www.uniprot.org/uniprotkb/{acc}/entry"
+        name_dict = data.get("proteinDescription", {}).get("recommendedName", {}); name = name_dict.get("fullName", {}).get("value", "N/A")
+        if name == "N/A" and data.get("proteinDescription", {}).get("submissionNames"): name = data["proteinDescription"]["submissionNames"][0].get("fullName", {}).get("value", "N/A")
+        genes_data = data.get("genes"); gene_str = "N/A"
+        if genes_data:
+            g_list = [g.get("geneName", {}).get("value", "") for g in genes_data if g.get("geneName")]
+            if not g_list: g_list = [g.get("orfNames", [{}])[0].get("value", "") for g in genes_data if g.get("orfNames")]
+            gene_str = ", ".join(filter(None, g_list)) or "N/A"
+        org_data = data.get("organism", {}); org_name = org_data.get("scientificName", "N/A")
+        if org_data.get("commonName"): org_name += f" ({org_data.get('commonName')})"
+        seq_info = data.get("sequence", {}); seq = seq_info.get("value", "N/A"); length = seq_info.get("length", 0)
+        mw_str = "N/A"
+        if seq != "N/A" and length > 0:
             try:
-                cleaned_sequence_for_mw = "".join(filter(lambda x: x in AMINO_ACID_NAMES, sequence.upper()))
-                if cleaned_sequence_for_mw:
-                     calculated_mol_weight = molecular_weight(cleaned_sequence_for_mw, seq_type="protein")
-                     calculated_mol_weight_str = f"{calculated_mol_weight:.2f} Da"
-                else: calculated_mol_weight_str = "Invalid sequence for MW calculation"
-            except Exception: calculated_mol_weight_str = "Error in MW calculation"
-        comments = uniprot_api_data.get("comments", []); function_comment_en = "N/A" 
-        for comment_item in comments:
-            if comment_item.get("commentType") == "FUNCTION":
-                function_texts = comment_item.get("texts", [])
-                if function_texts: function_comment_en = function_texts[0].get("value", "N/A"); break
+                clean_seq = "".join(filter(lambda x: x in AMINO_ACID_NAMES, seq.upper()))
+                if clean_seq: mw_str = f"{molecular_weight(clean_seq, seq_type='protein'):.2f} Da"
+                else: mw_str = "Invalid sequence for MW"
+            except: mw_str = "Error in MW calc"
+        comments_data = data.get("comments", []); func_comment = "N/A" 
+        for c_item in comments_data:
+            if c_item.get("commentType") == "FUNCTION":
+                texts = c_item.get("texts", [])
+                if texts: func_comment = texts[0].get("value", "N/A"); break
         
-        overview_md = (
-            f"**Primary Accession:** {primary_accession} ([View on UniProt]({uniprot_link}))\n" # Added UniProt link
-            f"**Protein Name:** {protein_name}\n"
-            f"**Gene Name(s):** {gene_name_str}\n"
-            f"**Organism:** {organism_name}\n"
-            f"**Sequence Length:** {length} amino acids\n"
-            f"**Molecular Weight (calculated):** {calculated_mol_weight_str}\n\n"
-            f"**Function Snippet:**\n{function_comment_en}\n\n"
-            f"**Amino Acid Sequence (first 100 residues):**\n`{sequence[:100]}{'...' if len(sequence) > 100 else ''}`"
-        )
+        overview_md = (f"**Accession:** {acc} ([View on UniProt]({link}))\n**Name:** {name}\n**Gene(s):** {gene_str}\n"
+                       f"**Organism:** {org_name}\n**Length:** {length} aa\n**MW:** {mw_str}\n\n"
+                       f"**Function:**\n{func_comment}\n\n**Sequence (100 aa):**\n`{seq[:100]}{'...' if len(seq) > 100 else ''}`")
         
-        interactions_md = extract_interactions(uniprot_api_data)
-        pathways_md = extract_pathways(uniprot_api_data)
+        interactions_md = extract_interactions(data)
+        pathways_md = extract_pathways(data)
+        disease_md = extract_disease_info(data)
 
-        aa_frequencies, freq_error = get_amino_acid_frequencies(sequence)
-        aa_plot_update = empty_plot_update
-        if freq_error: overview_md += f"\n\n**AA Freq. Analysis Error:** {freq_error}"
-        elif aa_frequencies:
-            pil_image_aa = plot_amino_acid_frequencies(aa_frequencies)
-            if pil_image_aa: aa_plot_update = gr.update(value=pil_image_aa, visible=True)
+        aa_freq, aa_err = get_amino_acid_frequencies(seq)
+        aa_plot_upd = empty_plot
+        if aa_err: overview_md += f"\n\n**AA Freq Error:** {aa_err}"
+        elif aa_freq:
+            img_aa = plot_amino_acid_frequencies(aa_freq)
+            if img_aa: aa_plot_upd = gr.update(value=img_aa, visible=True)
         
-        seq_features = extract_sequence_features(uniprot_api_data) 
-        feature_plot_update = empty_plot_update; features_plot_message = ""
-        if seq_features and length > 0:
-            pil_image_features = plot_sequence_features(length, seq_features)
-            if pil_image_features: feature_plot_update = gr.update(value=pil_image_features, visible=True)
-            else: features_plot_message = "Could not generate sequence feature plot."
-        elif not seq_features and length > 0 : features_plot_message = "No relevant features found for plotting."
+        seq_feat = extract_sequence_features(data) 
+        feat_plot_upd = empty_plot; feat_msg = ""
+        if seq_feat and length > 0:
+            img_feat = plot_sequence_features(length, seq_feat)
+            if img_feat: feat_plot_upd = gr.update(value=img_feat, visible=True)
+            else: feat_msg = "Could not generate sequence feature plot."
+        elif not seq_feat and length > 0 : feat_msg = "No relevant features found for plotting."
         
-        return overview_md, aa_plot_update, feature_plot_update, features_plot_message, pathways_md, interactions_md
+        return overview_md, aa_plot_upd, feat_plot_upd, feat_msg, pathways_md, interactions_md, disease_md
 
-    except requests.exceptions.HTTPError as http_err: 
-        status_code = http_err.response.status_code if http_err.response is not None else "N/A"
-        err_msg = f"Error: Protein ID '{uniprot_id}' not found." if status_code == 404 else f"HTTP error: {http_err}"
-        return err_msg, empty_plot_update, empty_plot_update, default_error_msg, default_error_msg, default_error_msg
-    except requests.exceptions.RequestException as req_err:
-        return f"Network error: {req_err}", empty_plot_update, empty_plot_update, default_error_msg, default_error_msg, default_error_msg
+    except requests.exceptions.HTTPError as e: 
+        err_msg_http = f"Error: ID '{uniprot_id}' not found." if e.response.status_code == 404 else f"HTTP error: {e}"
+        return err_msg_http, empty_plot, empty_plot, err_msg_default,err_msg_default,err_msg_default,err_msg_default
     except Exception as e:
-        return f"Unexpected error: {str(e)[:150]}", empty_plot_update, empty_plot_update, default_error_msg, default_error_msg, default_error_msg
+        return f"Error: {str(e)[:150]}", empty_plot, empty_plot, err_msg_default,err_msg_default,err_msg_default,err_msg_default
 
-with gr.Blocks(theme=gr.themes.Soft()) as iface:
-    gr.Markdown("# Protein Profile Viewer (v1.1 - UI/Data Order Impr.)")
-    gr.Markdown("Enter a UniProt ID to display its basic information, sequence analysis, pathways, and interactions.")
+with gr.Blocks(theme=gr.themes.Glass()) as iface:
+    gr.Markdown("# Protein Profile Viewer (v1.2 - Disease Info)")
+    gr.Markdown("Enter a UniProt ID to explore its details including general information, sequence analysis, pathways, interactions, and disease associations.")
     
     with gr.Row():
-        protein_id_input = gr.Textbox(label="Enter UniProt ID (e.g., P05067 or P00533)", placeholder="e.g., P0DP23", scale=3)
+        protein_id_input = gr.Textbox(label="Enter UniProt ID", placeholder="e.g., P00533", scale=3)
         submit_button = gr.Button("Submit", scale=1, variant="primary")
 
     with gr.Tabs():
         with gr.TabItem("Overview & Sequence"):
-            overview_output = gr.Markdown(label="Protein Information")
-        with gr.TabItem("Sequence Analysis Plots"):
+            gr.Markdown("### General Information & Sequence Snippet")
+            gr.Markdown("Basic details about the protein including its name, organism, length, molecular weight, a snippet of its function, and the first 100 amino acids of its sequence. A direct link to its UniProt entry is also provided.")
+            overview_output = gr.Markdown()
+        with gr.TabItem("Sequence Analysis"):
+            gr.Markdown("### Graphical Sequence Analysis")
+            gr.Markdown("Visualizations of the protein's amino acid composition and annotated sequence features like domains, motifs, and secondary structures.")
             with gr.Column(): 
                 aa_freq_plot_output = gr.Image(label="Amino Acid Frequency Plot", type="pil", show_label=True, visible=False)
                 seq_features_plot_output = gr.Image(label="Sequence Features Plot", type="pil", show_label=True, visible=False)
                 seq_features_message_output = gr.Markdown() 
-        with gr.TabItem("Pathways & Interactions"): # Renamed Tab
-            with gr.Column(): # Using a single column for now for simplicity, can be changed to Row
-                pathways_output = gr.Markdown(label="Biological Pathways (KEGG, Reactome)") # Pathways first
-                interactions_output = gr.Markdown(label="Protein Interactions") # Then interactions
+        with gr.TabItem("Functional Context"):
+            gr.Markdown("### Pathways, Interactions & Disease Associations")
+            gr.Markdown("Information about the biological context of the protein, including pathways it's involved in, its known interaction partners, and any associated diseases.")
+            with gr.Accordion("Biological Pathways (KEGG, Reactome)", open=False):
+                 pathways_output = gr.Markdown()
+            with gr.Accordion("Protein Interactions", open=False):
+                 interactions_output = gr.Markdown()
+            with gr.Accordion("Disease Associations", open=False):
+                 disease_output = gr.Markdown()
 
     submit_button.click(
         fn=get_protein_info,
         inputs=protein_id_input,
-        outputs=[overview_output, aa_freq_plot_output, seq_features_plot_output, seq_features_message_output, pathways_output, interactions_output]
+        outputs=[overview_output, aa_freq_plot_output, seq_features_plot_output, seq_features_message_output, pathways_output, interactions_output, disease_output]
     )
     
     gr.Examples(

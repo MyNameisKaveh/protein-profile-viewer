@@ -99,11 +99,45 @@ def plot_sequence_features(sequence_length, features):
     img = Image.open(buf); plt.close(fig)
     return img
 
-# Removed get_pdb_id function as 3D viewer is removed for now
+def extract_interactions(uniprot_data):
+    interactions = []
+    # Check 'comments' for INTERACTION type
+    if "comments" in uniprot_data:
+        for comment in uniprot_data["comments"]:
+            if comment.get("commentType") == "INTERACTION" and "interactions" in comment:
+                for interaction_entry in comment["interactions"]:
+                    interactant_one_acc = interaction_entry.get("interactantOne", {}).get("uniProtKBAccession")
+                    interactant_two_acc = interaction_entry.get("interactantTwo", {}).get("uniProtKBAccession")
+                    interactant_two_gene = interaction_entry.get("interactantTwo", {}).get("geneName")
+                    
+                    # Ensure the current protein is interactantOne and we have a partner
+                    if interactant_one_acc == uniprot_data.get("primaryAccession") and interactant_two_acc:
+                        partner_display_name = interactant_two_acc
+                        if interactant_two_gene:
+                            partner_display_name = f"{interactant_two_gene} ({interactant_two_acc})"
+                        interactions.append(f"- Interacts with: **{partner_display_name}**")
+    
+    if not interactions:
+        # Fallback or additional source: Check cross-references like IntAct
+        # This is a simplified check, IntAct often links to the protein's own IntAct page
+        # which then lists interactors. A direct list might not be in the main UniProt JSON for all.
+        if "uniProtKBCrossReferences" in uniprot_data:
+            intact_links = []
+            for xref in uniprot_data["uniProtKBCrossReferences"]:
+                if xref.get("database") == "IntAct" and xref.get("id"):
+                    intact_links.append(f"- [IntAct Entry: {xref.get('id')}](https://www.ebi.ac.uk/intact/interaction/{xref.get('id')}) (Further details on IntAct)") # It's usually the protein itself
+            if intact_links:
+                 interactions.append("\nFurther interaction data may be available at IntAct (see links in Cross-References if available).")
+
+
+    if not interactions: # If still no interactions found
+        return "No specific interaction partners readily parseable from comments or basic XRefs."
+        
+    return "\n".join(interactions)
+
 
 def get_protein_info(uniprot_id):
     if not uniprot_id:
-        # Now only 3 outputs expected (Markdown, AA Freq Plot, Features Plot)
         return "Please enter a UniProt ID.", gr.update(value=None, visible=False), gr.update(value=None, visible=False)
     
     url = UNIPROT_API_URL.format(accession=uniprot_id.strip().upper())
@@ -132,9 +166,9 @@ def get_protein_info(uniprot_id):
                 else: calculated_mol_weight_str = "Invalid sequence for MW calculation"
             except Exception: calculated_mol_weight_str = "Error in MW calculation"
         comments = uniprot_api_data.get("comments", []); function_comment_en = "N/A" 
-        for comment in comments:
-            if comment.get("commentType") == "FUNCTION":
-                function_texts = comment.get("texts", [])
+        for comment_item in comments:
+            if comment_item.get("commentType") == "FUNCTION":
+                function_texts = comment_item.get("texts", [])
                 if function_texts: function_comment_en = function_texts[0].get("value", "N/A"); break
         
         markdown_parts = [
@@ -145,6 +179,9 @@ def get_protein_info(uniprot_id):
             f"**Amino Acid Sequence (first 100 residues):**\n`{sequence[:100]}{'...' if len(sequence) > 100 else ''}`"
         ]
         
+        interactions_info = extract_interactions(uniprot_api_data)
+        markdown_parts.append(f"\n\n**Protein Interactions:**\n{interactions_info}")
+
         aa_frequencies, freq_error = get_amino_acid_frequencies(sequence)
         aa_plot_update = gr.update(value=None, visible=False)
         if freq_error: markdown_parts.append(f"\n\n**Amino Acid Frequency Analysis:** {freq_error}")
@@ -153,7 +190,6 @@ def get_protein_info(uniprot_id):
             if pil_image_aa: aa_plot_update = gr.update(value=pil_image_aa, visible=True)
         
         seq_features = extract_sequence_features(uniprot_api_data) 
-
         feature_plot_update = gr.update(value=None, visible=False)
         if seq_features and length > 0:
             pil_image_features = plot_sequence_features(length, seq_features)
@@ -161,11 +197,7 @@ def get_protein_info(uniprot_id):
             else: markdown_parts.append("\n\n**Sequence Features:** Could not generate feature plot.")
         elif not seq_features and length > 0 : markdown_parts.append("\n\n**Sequence Features:** No features of the selected types found or feature data is unavailable.")
         
-        # Removed PDB ID extraction and HTML generation logic
-        # markdown_parts.append("\n\n**3D Structure:** (Viewer temporarily disabled)") # Optional message
-
         final_markdown = "".join(markdown_parts)
-        # Return only three items now
         return final_markdown, aa_plot_update, feature_plot_update
 
     except requests.exceptions.HTTPError as http_err: 
@@ -177,21 +209,19 @@ def get_protein_info(uniprot_id):
     except Exception as e:
         return f"An unexpected error occurred while processing ID '{uniprot_id}'. Details: {str(e)[:150]}", gr.update(value=None, visible=False), gr.update(value=None, visible=False)
 
-# Updated outputs_list to have only 3 components
 outputs_list = [
     gr.Markdown(label="Protein Information"),
     gr.Image(label="Amino Acid Frequency Plot", type="pil", show_label=True, visible=False),
     gr.Image(label="Sequence Features Plot", type="pil", show_label=True, visible=False)
-    # Removed gr.HTML for 3D viewer
 ]
 
 iface = gr.Interface(
     fn=get_protein_info,
     inputs=gr.Textbox(label="Enter UniProt ID (e.g., P05067 or INS_HUMAN)", placeholder="e.g., P0DP23"),
-    outputs=outputs_list, # Using the updated list
-    title="Protein Profile Viewer (v0.7 - No 3D)", 
-    description="Enter a UniProt ID to display its basic information, amino acid frequency, and sequence features plot.",
-    examples=[["P05067"], ["P00533"], ["Q9BYF1"], ["P0DP23"], ["P04637"]], # Removed PDB ID specific examples for now
+    outputs=outputs_list, 
+    title="Protein Profile Viewer (v0.8 - Interactions)", 
+    description="Enter a UniProt ID to display its basic information, amino acid frequency, sequence features, and protein interactions.",
+    examples=[["P05067"], ["P00533"], ["Q9BYF1"], ["P0DP23"], ["P04637"]],
     flagging_options=None 
 )
 

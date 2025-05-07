@@ -100,8 +100,7 @@ def plot_sequence_features(sequence_length, features):
     return img
 
 def extract_interactions(uniprot_data):
-    interactions = []
-    # Check 'comments' for INTERACTION type
+    interactions_list = []
     if "comments" in uniprot_data:
         for comment in uniprot_data["comments"]:
             if comment.get("commentType") == "INTERACTION" and "interactions" in comment:
@@ -109,40 +108,27 @@ def extract_interactions(uniprot_data):
                     interactant_one_acc = interaction_entry.get("interactantOne", {}).get("uniProtKBAccession")
                     interactant_two_acc = interaction_entry.get("interactantTwo", {}).get("uniProtKBAccession")
                     interactant_two_gene = interaction_entry.get("interactantTwo", {}).get("geneName")
-                    
-                    # Ensure the current protein is interactantOne and we have a partner
                     if interactant_one_acc == uniprot_data.get("primaryAccession") and interactant_two_acc:
                         partner_display_name = interactant_two_acc
                         if interactant_two_gene:
                             partner_display_name = f"{interactant_two_gene} ({interactant_two_acc})"
-                        interactions.append(f"- Interacts with: **{partner_display_name}**")
+                        interactions_list.append(f"- Interacts with: **{partner_display_name}**")
     
-    if not interactions:
-        # Fallback or additional source: Check cross-references like IntAct
-        # This is a simplified check, IntAct often links to the protein's own IntAct page
-        # which then lists interactors. A direct list might not be in the main UniProt JSON for all.
-        if "uniProtKBCrossReferences" in uniprot_data:
-            intact_links = []
-            for xref in uniprot_data["uniProtKBCrossReferences"]:
-                if xref.get("database") == "IntAct" and xref.get("id"):
-                    intact_links.append(f"- [IntAct Entry: {xref.get('id')}](https://www.ebi.ac.uk/intact/interaction/{xref.get('id')}) (Further details on IntAct)") # It's usually the protein itself
-            if intact_links:
-                 interactions.append("\nFurther interaction data may be available at IntAct (see links in Cross-References if available).")
-
-
-    if not interactions: # If still no interactions found
-        return "No specific interaction partners readily parseable from comments or basic XRefs."
-        
-    return "\n".join(interactions)
+    if not interactions_list:
+        return "No specific interaction partners listed in comments."
+    return "\n".join(interactions_list)
 
 
 def get_protein_info(uniprot_id):
+    # Expected outputs: overview_md, aa_freq_plot_update, features_plot_update, interactions_md
+    empty_plot_update = gr.update(value=None, visible=False)
     if not uniprot_id:
-        return "Please enter a UniProt ID.", gr.update(value=None, visible=False), gr.update(value=None, visible=False)
+        return "Please enter a UniProt ID.", empty_plot_update, empty_plot_update, "No interactions to display."
     
     url = UNIPROT_API_URL.format(accession=uniprot_id.strip().upper())
     try:
         response = requests.get(url); response.raise_for_status(); uniprot_api_data = response.json()
+        
         primary_accession = uniprot_api_data.get("primaryAccession", "N/A")
         protein_data_dict = uniprot_api_data.get("proteinDescription", {}).get("recommendedName", {})
         protein_name = protein_data_dict.get("fullName", {}).get("value", "N/A")
@@ -171,59 +157,78 @@ def get_protein_info(uniprot_id):
                 function_texts = comment_item.get("texts", [])
                 if function_texts: function_comment_en = function_texts[0].get("value", "N/A"); break
         
-        markdown_parts = [
-            f"**Primary Accession:** {primary_accession}\n", f"**Protein Name:** {protein_name}\n",
-            f"**Gene Name(s):** {gene_name_str}\n", f"**Organism:** {organism_name}\n",
-            f"**Sequence Length:** {length} amino acids\n", f"**Molecular Weight (calculated):** {calculated_mol_weight_str}\n\n",
-            f"**Function Snippet:**\n{function_comment_en}\n\n",
+        overview_md = (
+            f"**Primary Accession:** {primary_accession}\n"
+            f"**Protein Name:** {protein_name}\n"
+            f"**Gene Name(s):** {gene_name_str}\n"
+            f"**Organism:** {organism_name}\n"
+            f"**Sequence Length:** {length} amino acids\n"
+            f"**Molecular Weight (calculated):** {calculated_mol_weight_str}\n\n"
+            f"**Function Snippet:**\n{function_comment_en}\n\n"
             f"**Amino Acid Sequence (first 100 residues):**\n`{sequence[:100]}{'...' if len(sequence) > 100 else ''}`"
-        ]
+        )
         
-        interactions_info = extract_interactions(uniprot_api_data)
-        markdown_parts.append(f"\n\n**Protein Interactions:**\n{interactions_info}")
+        interactions_md = extract_interactions(uniprot_api_data)
 
         aa_frequencies, freq_error = get_amino_acid_frequencies(sequence)
-        aa_plot_update = gr.update(value=None, visible=False)
-        if freq_error: markdown_parts.append(f"\n\n**Amino Acid Frequency Analysis:** {freq_error}")
+        aa_plot_update = empty_plot_update
+        if freq_error: overview_md += f"\n\n**Amino Acid Frequency Analysis:** {freq_error}" # Add error to main overview
         elif aa_frequencies:
             pil_image_aa = plot_amino_acid_frequencies(aa_frequencies)
             if pil_image_aa: aa_plot_update = gr.update(value=pil_image_aa, visible=True)
         
         seq_features = extract_sequence_features(uniprot_api_data) 
-        feature_plot_update = gr.update(value=None, visible=False)
+        feature_plot_update = empty_plot_update
+        features_plot_message = ""
         if seq_features and length > 0:
             pil_image_features = plot_sequence_features(length, seq_features)
             if pil_image_features: feature_plot_update = gr.update(value=pil_image_features, visible=True)
-            else: markdown_parts.append("\n\n**Sequence Features:** Could not generate feature plot.")
-        elif not seq_features and length > 0 : markdown_parts.append("\n\n**Sequence Features:** No features of the selected types found or feature data is unavailable.")
+            else: features_plot_message = "Could not generate feature plot."
+        elif not seq_features and length > 0 : features_plot_message = "No features of the selected types found or feature data is unavailable."
         
-        final_markdown = "".join(markdown_parts)
-        return final_markdown, aa_plot_update, feature_plot_update
+        # Return values in the order of the tabs/outputs defined in the UI
+        return overview_md, aa_plot_update, feature_plot_update, features_plot_message, interactions_md
 
     except requests.exceptions.HTTPError as http_err: 
         status_code = http_err.response.status_code if http_err.response is not None else "N/A"
         error_message_en = f"Error: Protein with ID '{uniprot_id}' not found. Please check the ID." if status_code == 404 else f"HTTP error occurred: {http_err} (Status code: {status_code})"
-        return error_message_en, gr.update(value=None, visible=False), gr.update(value=None, visible=False)
+        return error_message_en, empty_plot_update, empty_plot_update, "Error fetching data.", "Error fetching data."
     except requests.exceptions.RequestException as req_err:
-        return f"A network error occurred: {req_err}", gr.update(value=None, visible=False), gr.update(value=None, visible=False)
+        return f"A network error occurred: {req_err}", empty_plot_update, empty_plot_update, "Network error.", "Network error."
     except Exception as e:
-        return f"An unexpected error occurred while processing ID '{uniprot_id}'. Details: {str(e)[:150]}", gr.update(value=None, visible=False), gr.update(value=None, visible=False)
+        return f"An unexpected error: {str(e)[:150]}", empty_plot_update, empty_plot_update, "Unexpected error.", "Unexpected error."
 
-outputs_list = [
-    gr.Markdown(label="Protein Information"),
-    gr.Image(label="Amino Acid Frequency Plot", type="pil", show_label=True, visible=False),
-    gr.Image(label="Sequence Features Plot", type="pil", show_label=True, visible=False)
-]
+# Define Gradio UI with Tabs
+with gr.Blocks() as iface:
+    gr.Markdown("# Protein Profile Viewer (v0.9 - Tabbed Interface)")
+    gr.Markdown("Enter a UniProt ID to display its basic information, sequence analysis, and protein interactions.")
+    
+    with gr.Row():
+        protein_id_input = gr.Textbox(label="Enter UniProt ID (e.g., P05067 or P00533)", placeholder="e.g., P0DP23")
+        submit_button = gr.Button("Submit")
 
-iface = gr.Interface(
-    fn=get_protein_info,
-    inputs=gr.Textbox(label="Enter UniProt ID (e.g., P05067 or INS_HUMAN)", placeholder="e.g., P0DP23"),
-    outputs=outputs_list, 
-    title="Protein Profile Viewer (v0.8 - Interactions)", 
-    description="Enter a UniProt ID to display its basic information, amino acid frequency, sequence features, and protein interactions.",
-    examples=[["P05067"], ["P00533"], ["Q9BYF1"], ["P0DP23"], ["P04637"]],
-    flagging_options=None 
-)
+    with gr.Tabs():
+        with gr.TabItem("Overview & Sequence"):
+            overview_output = gr.Markdown(label="Protein Information")
+        with gr.TabItem("Sequence Analysis Plots"):
+            with gr.Column(): # Use Column for better layout if needed
+                aa_freq_plot_output = gr.Image(label="Amino Acid Frequency Plot", type="pil", show_label=True, visible=False)
+                seq_features_plot_output = gr.Image(label="Sequence Features Plot", type="pil", show_label=True, visible=False)
+                seq_features_message_output = gr.Markdown() # For messages like "No features found"
+        with gr.TabItem("Interactions"):
+            interactions_output = gr.Markdown(label="Protein Interactions")
+
+    # Define how the submit button triggers the function and updates the outputs
+    submit_button.click(
+        fn=get_protein_info,
+        inputs=protein_id_input,
+        outputs=[overview_output, aa_freq_plot_output, seq_features_plot_output, seq_features_message_output, interactions_output]
+    )
+    
+    gr.Examples(
+        examples=[["P05067"], ["P00533"], ["Q9BYF1"], ["P0DP23"], ["P04637"]],
+        inputs=protein_id_input
+    )
 
 if __name__ == "__main__":
     iface.launch()

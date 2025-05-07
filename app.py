@@ -1,3 +1,4 @@
+# Imports (requests, gradio, Bio, Counter, matplotlib, io, PIL, sys, traceback, json)
 import gradio as gr
 import requests
 from Bio.SeqUtils import molecular_weight
@@ -9,8 +10,9 @@ import sys
 import traceback
 import json 
 
+# Constants
 UNIPROT_API_URL = "https://rest.uniprot.org/uniprotkb/{accession}.json"
-
+UNIPROT_SEARCH_URL = "https://rest.uniprot.org/uniprotkb/search"
 AMINO_ACID_NAMES = {
     'A': 'Alanine', 'R': 'Arginine', 'N': 'Asparagine', 'D': 'Aspartic acid',
     'C': 'Cysteine', 'Q': 'Glutamine', 'E': 'Glutamic acid', 'G': 'Glycine',
@@ -20,7 +22,10 @@ AMINO_ACID_NAMES = {
 }
 STANDARD_AMINO_ACIDS_ORDER = "ARNDCQEGHILKMFPSTWYV" 
 
+# --- Helper Functions (Extraction & Plotting) ---
+
 def get_amino_acid_frequencies(sequence):
+    # ... (Implementation from previous version) ...
     if not sequence or sequence == "N/A": return None, "Sequence not available for analysis."
     cleaned_sequence = "".join(filter(lambda x: x in AMINO_ACID_NAMES, sequence.upper()))
     if not cleaned_sequence: return None, "No valid amino acids found in sequence for counting."
@@ -29,6 +34,7 @@ def get_amino_acid_frequencies(sequence):
     return frequencies, None
 
 def plot_amino_acid_frequencies(frequencies):
+    # ... (Implementation from previous version) ...
     if not frequencies: return None
     ordered_keys = [key for key in STANDARD_AMINO_ACIDS_ORDER if key in frequencies]
     labels = [f"{aa}: {AMINO_ACID_NAMES.get(aa, aa)}" for aa in ordered_keys]
@@ -41,6 +47,7 @@ def plot_amino_acid_frequencies(frequencies):
     return img
 
 def extract_sequence_features(uniprot_data):
+    # ... (Implementation from previous version) ...
     features_of_interest_uppercase = {
         "DOMAIN": "blue", "MOTIF": "green", "ACTIVE_SITE": "red",
         "BINDING_SITE": "orange", "MOD_RES": "purple", 
@@ -78,6 +85,7 @@ def extract_sequence_features(uniprot_data):
     return extracted_features
 
 def plot_sequence_features(sequence_length, features):
+    # ... (Implementation from previous version) ...
     if not features or sequence_length == 0: return None
     fig, ax = plt.subplots(figsize=(12, max(3, len(features) * 0.4) + 1.5)) 
     ax.set_xlim(0, sequence_length); ax.set_xlabel("Amino Acid Position"); ax.set_yticks([]) 
@@ -100,6 +108,7 @@ def plot_sequence_features(sequence_length, features):
     return img
 
 def extract_interactions(uniprot_data):
+    # ... (Implementation from previous version) ...
     interactions_list = []
     if "comments" in uniprot_data:
         for comment in uniprot_data["comments"]:
@@ -113,12 +122,11 @@ def extract_interactions(uniprot_data):
                         if interactant_two_gene:
                             partner_display_name = f"{interactant_two_gene} ({interactant_two_acc})"
                         interactions_list.append(f"- Interacts with: **{partner_display_name}**")
-    if not interactions_list:
-        return "No specific interaction partners listed in UniProt comments."
-    # Sort alphabetically for consistency
+    if not interactions_list: return "No specific interaction partners listed in UniProt comments."
     return "\n".join(sorted(interactions_list))
 
 def extract_pathways(uniprot_data):
+    # ... (Implementation from previous version) ...
     pathways = []
     pathway_databases = { "KEGG": "https://www.genome.jp/dbget-bin/www_bget?", "Reactome": "https://reactome.org/content/detail/" }
     if "uniProtKBCrossReferences" in uniprot_data:
@@ -138,6 +146,7 @@ def extract_pathways(uniprot_data):
     return "\n".join(sorted(list(set(pathways))))
 
 def extract_disease_info(uniprot_data):
+    # ... (Implementation from previous version) ...
     disease_info_list = []
     if "comments" in uniprot_data:
         for comment in uniprot_data["comments"]:
@@ -157,19 +166,18 @@ def extract_disease_info(uniprot_data):
                         if note_val: disease_md += f"   - *Note:* {note_val}\n"
                 disease_info_list.append(disease_md)
     if not disease_info_list: return "No specific disease association information found in UniProt comments."
-    return "\n---\n".join(sorted(disease_info_list)) # Sort alphabetically by disease name
+    return "\n---\n".join(sorted(disease_info_list))
 
 def extract_publications(uniprot_data):
+    # ... (Implementation from previous version) ...
     publications_list = []
     if "references" in uniprot_data:
         for ref_idx, ref in enumerate(uniprot_data.get("references", [])):
             citation = ref.get("citation", {})
             title = citation.get("title", "N/A")
             authors = ", ".join(citation.get("authors", ["N/A"]))
-            journal = citation.get("journalName", "N/A")
-            volume = citation.get("volume", "")
-            first_page = citation.get("firstPage", "")
-            last_page = citation.get("lastPage", "")
+            journal = citation.get("journalName", "N/A"); volume = citation.get("volume", "")
+            first_page = citation.get("firstPage", ""); last_page = citation.get("lastPage", "")
             publication_date = citation.get("publicationDate", "")
             pubmed_id = None; doi_id = None
             if "citationCrossReferences" in citation:
@@ -177,13 +185,11 @@ def extract_publications(uniprot_data):
                     if xref_cite.get("database") == "PubMed": pubmed_id = xref_cite.get("id")
                     elif xref_cite.get("database") == "DOI": doi_id = xref_cite.get("id")
             pub_md = f"**{ref_idx + 1}. Title:** {title}\n"
-            pub_md += f"   - *Authors:* {authors}\n"
-            pub_md += f"   - *Journal:* {journal}"
+            pub_md += f"   - *Authors:* {authors}\n   - *Journal:* {journal}"
             if volume: pub_md += f", Vol. {volume}"
             if first_page: pub_md += f", pp. {first_page}"
             if last_page: pub_md += f"-{last_page}"
-            if publication_date: pub_md += f" ({publication_date})"
-            pub_md += "\n"
+            if publication_date: pub_md += f" ({publication_date})\n" else: pub_md += "\n"
             if pubmed_id: pub_md += f"   - *PubMed:* [{pubmed_id}](https://pubmed.ncbi.nlm.nih.gov/{pubmed_id}/)\n"
             if doi_id: pub_md += f"   - *DOI:* [{doi_id}](https://doi.org/{doi_id})\n"
             publications_list.append(pub_md)
@@ -191,15 +197,14 @@ def extract_publications(uniprot_data):
     return "\n---\n".join(publications_list)
 
 def extract_cross_references(uniprot_data):
+    # ... (Implementation from previous version) ...
     xref_list = []
     target_databases = {
         "Ensembl": "https://www.ensembl.org/id/", "GeneID": "https://www.ncbi.nlm.nih.gov/gene/", 
         "RefSeq": "https://www.ncbi.nlm.nih.gov/nuccore/", "GO": "https://amigo.geneontology.org/amigo/term/", 
         "InterPro": "https://www.ebi.ac.uk/interpro/entry/InterPro/", 
-        "Pfam": "https://www.ebi.ac.uk/interpro/entry/pfam/", 
-        "PDB": "https://www.rcsb.org/structure/",
-        "KEGG": "https://www.genome.jp/dbget-bin/www_bget?", # Add KEGG gene link
-        "Reactome": "https://reactome.org/content/detail/" # Reactome protein link (usually same as pathway)
+        "Pfam": "https://www.ebi.ac.uk/interpro/entry/pfam/", "PDB": "https://www.rcsb.org/structure/",
+        "KEGG": "https://www.genome.jp/dbget-bin/www_bget?", "Reactome": "https://reactome.org/content/detail/"
     }
     grouped_xrefs = {db: [] for db in target_databases}
     if "uniProtKBCrossReferences" in uniprot_data:
@@ -211,50 +216,63 @@ def extract_cross_references(uniprot_data):
                     for prop in xref["properties"]:
                         if prop.get("key") == "GeneId":
                             ensembl_gene_id = prop.get("value")
-                            link_url = f"https://www.ensembl.org/Homo_sapiens/Gene/Summary?g={ensembl_gene_id}"
-                            display_text = ensembl_gene_id; break
+                            link_url = f"https://www.ensembl.org/Homo_sapiens/Gene/Summary?g={ensembl_gene_id}"; display_text = ensembl_gene_id; break
                     if link_url is None:
                         for prop in xref["properties"]:
                            if prop.get("key") == "ProteinId":
                                 ensembl_prot_id = prop.get("value")
-                                link_url = f"https://www.ensembl.org/Homo_sapiens/Transcript/Summary?p={ensembl_prot_id}"
-                                display_text = ensembl_prot_id; break
+                                link_url = f"https://www.ensembl.org/Homo_sapiens/Transcript/Summary?p={ensembl_prot_id}"; display_text = ensembl_prot_id; break
                 elif db_name == "RefSeq" and "properties" in xref:
                      for prop in xref["properties"]:
                          if prop.get("key") == "ProteinId" or prop.get("key") == "NucleotideSequenceId":
-                             refseq_id = prop.get("value")
-                             link_url = target_databases[db_name] + refseq_id
-                             display_text = refseq_id; break
+                             refseq_id = prop.get("value"); link_url = target_databases[db_name] + refseq_id; display_text = refseq_id; break
                 elif db_name == "GO" and xref_id:
                     term_name = xref_id
                     if "properties" in xref:
                         for prop in xref["properties"]:
                              if prop.get("key") == "GoTerm": term_name = prop.get("value"); break
                     link_url = target_databases[db_name] + xref_id; display_text = f"{term_name} ({xref_id})"
-                elif db_name == "Pfam" and xref_id:
-                    link_url = f"https://www.ebi.ac.uk/interpro/entry/pfam/{xref_id}"
+                elif db_name == "Pfam" and xref_id: link_url = f"https://www.ebi.ac.uk/interpro/entry/pfam/{xref_id}"
                 elif xref_id: link_url = target_databases[db_name] + xref_id
-                
                 if link_url: grouped_xrefs[db_name].append(f"[{display_text}]({link_url})")
-
         for db_name, links in grouped_xrefs.items():
             if links: xref_list.append(f"**{db_name}:** " + ", ".join(sorted(list(set(links)))))
     if not xref_list: return "No cross-references found for the selected databases."
     return "\n".join(xref_list)
 
+# --- NEW Search Function ---
+def search_uniprot_by_name(search_term, result_limit=5):
+    if not search_term or len(search_term) < 3: return "Enter at least 3 characters."
+    params = { "query": f'({search_term}) AND (reviewed:true)', "fields": "accession,protein_name,organism_name,id", "format": "json", "size": result_limit }
+    md_parts = [f"### Search Results for '{search_term}' (Top {result_limit} Reviewed):\n"]
+    try:
+        response = requests.get(UNIPROT_SEARCH_URL, params=params); response.raise_for_status(); data = response.json()
+        results = data.get("results")
+        if not results: md_parts.append("No reviewed entries found.")
+        else:
+            md_parts.append(f"*Found {len(results)}. Copy desired Accession ID and paste below.*\n---")
+            for entry in results:
+                acc = entry.get("primaryAccession", "N/A"); protein_name = "N/A"
+                if entry.get("proteinDescription", {}).get("recommendedName", {}).get("fullName", {}).get("value"):
+                    protein_name = entry["proteinDescription"]["recommendedName"]["fullName"]["value"]
+                elif entry.get("proteinDescription", {}).get("submissionNames"): protein_name = entry["proteinDescription"]["submissionNames"][0].get("fullName",{}).get("value", "N/A")
+                organism = entry.get("organism", {}).get("scientificName", "N/A"); uniprot_id_display = entry.get("uniProtkbId", "")
+                md_parts.append(f"- **{acc}** (`{uniprot_id_display}`): {protein_name} - *{organism}*")
+            md_parts.append("---")
+    except Exception as e: md_parts.append(f"\n**Search Error:** {e}")
+    return "\n".join(md_parts)
+
+# --- Main Function to Get All Info ---
 def get_protein_info(uniprot_id):
-    empty_plot = gr.update(value=None, visible=False); empty_str = ""; err_msg_default = "Error."
-    outputs_on_error = (err_msg_default, empty_plot, empty_plot, empty_str, 
-                        empty_str, empty_str, empty_str, empty_str, empty_str) 
-    if not uniprot_id:
-        return ("Please enter a UniProt ID.",) + outputs_on_error[1:]
+    empty_plot = gr.update(value=None, visible=False); empty_str = ""; err_msg = "Error"
+    outputs_on_error = (err_msg, empty_plot, empty_plot, err_msg, err_msg, err_msg, err_msg, err_msg, err_msg) 
+    if not uniprot_id: return ("Enter UniProt ID.",) + outputs_on_error[1:]
     
     url = UNIPROT_API_URL.format(accession=uniprot_id.strip().upper())
     try:
         response = requests.get(url); response.raise_for_status(); data = response.json()
-        
         acc = data.get("primaryAccession", "N/A"); id_display = data.get("uniProtkbId", "N/A")
-        uniprot_link = f"https://www.uniprot.org/uniprotkb/{acc}/entry"
+        link = f"https://www.uniprot.org/uniprotkb/{acc}/entry"
         name_dict = data.get("proteinDescription", {}).get("recommendedName", {}); name = name_dict.get("fullName", {}).get("value", "N/A")
         if name == "N/A" and data.get("proteinDescription", {}).get("submissionNames"): name = data["proteinDescription"]["submissionNames"][0].get("fullName", {}).get("value", "N/A")
         genes_data = data.get("genes"); gene_str = "N/A"
@@ -262,14 +280,12 @@ def get_protein_info(uniprot_id):
             g_list = [g.get("geneName", {}).get("value", "") for g in genes_data if g.get("geneName")]
             if not g_list: g_list = [g.get("orfNames", [{}])[0].get("value", "") for g in genes_data if g.get("orfNames")]
             gene_str = ", ".join(filter(None, g_list)) or "N/A"
-        org_data = data.get("organism", {}); org_sci_name = org_data.get("scientificName", "N/A")
-        org_common_name = org_data.get("commonName", "")
+        org_data = data.get("organism", {}); org_sci_name = org_data.get("scientificName", "N/A"); org_common_name = org_data.get("commonName", "")
         org_display = f"{org_sci_name}" + (f" ({org_common_name})" if org_common_name else "")
         seq_info = data.get("sequence", {}); seq_val = seq_info.get("value", "N/A"); length = seq_info.get("length", 0)
         status_val = data.get("entryAudit", {}).get("entryType", "N/A").replace("UniProtKB ", "")
         existence_val = data.get("proteinExistence", "N/A").replace(": Evidence at ", ": ")
-        score_val = data.get("annotationScore", "N/A")
-        mw_str = "N/A"
+        score_val = data.get("annotationScore", "N/A"); mw_str = "N/A"
         if seq_val != "N/A" and length > 0:
             try:
                 clean_seq = "".join(filter(lambda x: x in AMINO_ACID_NAMES, seq_val.upper()))
@@ -279,37 +295,32 @@ def get_protein_info(uniprot_id):
         comments_data = data.get("comments", []); func_comment = "N/A" 
         for c_item in comments_data:
             if c_item.get("commentType") == "FUNCTION":
-                texts = c_item.get("texts", [])
+                texts = c_item.get("texts", []);
                 if texts: func_comment = texts[0].get("value", "N/A"); break
         
-        overview_md = (f"## {id_display} ({acc})\n"
-                       f"[{acc} on UniProt]({uniprot_link})\n\n"
+        overview_md = (f"## {id_display} ({acc})\n[{acc} on UniProt]({link})\n\n"
                        f"**Protein:** {name}\n**Gene:** {gene_str}\n**Status:** {status_val}\n"
                        f"**Organism:** {org_display}\n**Length:** {length} aa\n"
                        f"**Existence:** {existence_val}\n**Score:** {score_val}/5\n**Calc. MW:** {mw_str}\n\n"
                        f"**Function Snippet:**\n{func_comment}\n\n"
                        f"**Sequence (first 100 aa):**\n`{seq_val[:100]}{'...' if len(seq_val) > 100 else ''}`\n\n"
                        f"--- \n*More details in other tabs.*")
-
-        interactions_md = extract_interactions(data)
-        pathways_md = extract_pathways(data)
-        disease_md = extract_disease_info(data)
-        publications_md = extract_publications(data)
+        
+        interactions_md = extract_interactions(data); pathways_md = extract_pathways(data)
+        disease_md = extract_disease_info(data); publications_md = extract_publications(data)
         xref_md = extract_cross_references(data) 
 
-        aa_freq, aa_err = get_amino_acid_frequencies(seq_val)
-        aa_plot_upd = empty_plot
+        aa_freq, aa_err = get_amino_acid_frequencies(seq_val); aa_plot_upd = empty_plot
         if aa_err: overview_md += f"\n\n**AA Freq Error:** {aa_err}"
         elif aa_freq:
             img_aa = plot_amino_acid_frequencies(aa_freq)
             if img_aa: aa_plot_upd = gr.update(value=img_aa, visible=True)
         
-        seq_feat = extract_sequence_features(data) 
-        feat_plot_upd = empty_plot; feat_msg = ""
+        seq_feat = extract_sequence_features(data); feat_plot_upd = empty_plot; feat_msg = ""
         if seq_feat and length > 0:
             img_feat = plot_sequence_features(length, seq_feat)
             if img_feat: feat_plot_upd = gr.update(value=img_feat, visible=True)
-            else: feat_msg = "Could not generate sequence feature plot."
+            else: feat_msg = "Could not generate feature plot."
         elif not seq_feat and length > 0 : feat_msg = "No relevant features found for plotting."
         
         return (overview_md, aa_plot_upd, feat_plot_upd, feat_msg, 
@@ -321,18 +332,31 @@ def get_protein_info(uniprot_id):
     except Exception as e:
         return (f"Error: {str(e)[:150]}",) + outputs_on_error[1:]
 
+# --- Gradio UI Definition ---
 with gr.Blocks(theme=gr.themes.Glass()) as iface:
-    gr.Markdown("# Protein Profile Viewer (v1.4 - Cross-references)")
-    gr.Markdown("Enter a UniProt ID to explore its details including overview, sequence analysis, functional context, publications, and links to other databases.")
+    gr.Markdown("# Protein Profile Viewer (v1.5 - ID Search)")
+    gr.Markdown("Enter a UniProt ID directly, **OR** search for a protein/gene name below to find its ID first.")
+    
+    with gr.Group():
+        gr.Markdown("### Find UniProt ID by Name/Keyword")
+        with gr.Row():
+            search_term_input = gr.Textbox(label="Enter Protein/Gene Name (e.g., insulin, EGFR)", scale=3)
+            search_button = gr.Button("Search ID", scale=1)
+        search_results_output = gr.Markdown(label="Search Results (Copy the Accession ID you need)")
+
+    gr.Markdown("---") 
+
+    gr.Markdown("### View Protein Profile")
     with gr.Row():
-        protein_id_input = gr.Textbox(label="Enter UniProt ID", placeholder="e.g., P00533", scale=3)
-        submit_button = gr.Button("Submit", scale=1, variant="primary")
+        protein_id_input = gr.Textbox(label="Enter UniProt Accession ID (e.g., P01308 or P00533)", placeholder="Paste ID here", scale=3)
+        submit_button = gr.Button("Get Profile", scale=1, variant="primary")
+
     with gr.Tabs():
         with gr.TabItem("Overview"):
-            gr.Markdown("### Protein Overview\nKey information about the protein, including its UniProt ID, name, gene, organism, length, function snippet, and a link to the full UniProt entry. The first 100 amino acids of the sequence are also displayed here.")
+            gr.Markdown("### Protein Overview\nKey info: UniProt ID, name, gene, organism, function, sequence snippet & UniProt link.")
             overview_output = gr.Markdown()
         with gr.TabItem("Analysis Plots"):
-            gr.Markdown("### Sequence Analysis Visualizations\nGraphical representations of amino acid composition and annotated sequence features.")
+            gr.Markdown("### Sequence Analysis Visualizations\nAmino acid composition and annotated features (domains, motifs, etc.).")
             with gr.Column(): 
                 aa_freq_plot_output = gr.Image(label="Amino Acid Frequency Plot", type="pil", show_label=True, visible=False)
                 seq_features_plot_output = gr.Image(label="Sequence Features Plot", type="pil", show_label=True, visible=False)
@@ -348,10 +372,11 @@ with gr.Blocks(theme=gr.themes.Glass()) as iface:
         with gr.TabItem("Publications"):
             gr.Markdown("### Relevant Publications\nA list of scientific publications from UniProt.")
             publications_output = gr.Markdown()
-        with gr.TabItem("Cross-references"): # New Tab
-             gr.Markdown("### Database Links\nLinks to this protein's entry in other relevant biological databases (e.g., Ensembl, RefSeq, GO, PDB).")
-             xref_output = gr.Markdown() # New output component
+        with gr.TabItem("Cross-references"):
+             gr.Markdown("### Database Links\nLinks to this protein's entry in other relevant biological databases.")
+             xref_output = gr.Markdown()
 
+    search_button.click(fn=search_uniprot_by_name, inputs=search_term_input, outputs=search_results_output)
     submit_button.click(
         fn=get_protein_info,
         inputs=protein_id_input,
@@ -360,7 +385,7 @@ with gr.Blocks(theme=gr.themes.Glass()) as iface:
     )
     gr.Examples(
         examples=[["P05067"], ["P00533"], ["Q9BYF1"], ["P0DP23"], ["P04637"]],
-        inputs=protein_id_input
+        inputs=protein_id_input 
     )
 
 if __name__ == "__main__":

@@ -4,26 +4,32 @@ from Bio.SeqUtils import molecular_weight
 from collections import Counter
 import matplotlib.pyplot as plt
 import io
-# import base64 # دیگه برای این روش لازم نیست
-from PIL import Image # برای کار با آبجکت تصویر Pillow
+from PIL import Image
+import sys # For more detailed error logging if needed
+import traceback # For more detailed error logging if needed
 
 UNIPROT_API_URL = "https://rest.uniprot.org/uniprotkb/{accession}.json"
 
 def get_amino_acid_frequencies(sequence):
-    # ... (این تابع بدون تغییر باقی می‌مونه) ...
+    """
+    Calculates the frequency of each amino acid in the sequence.
+    """
     if not sequence or sequence == "N/A":
-        return None, "توالی برای تحلیل موجود نیست."
+        return None, "Sequence not available for analysis."
+    
     standard_amino_acids = "ACDEFGHIKLMNPQRSTVWY"
     cleaned_sequence = "".join(filter(lambda x: x in standard_amino_acids, sequence.upper()))
+    
     if not cleaned_sequence:
-        return None, "توالی معتبر برای شمارش آمینواسیدها یافت نشد."
+        return None, "No valid amino acids found in sequence for counting."
+        
     counts = Counter(cleaned_sequence)
     frequencies = {aa: counts.get(aa, 0) for aa in standard_amino_acids}
     return frequencies, None
 
 def plot_amino_acid_frequencies(frequencies):
     """
-    نمودار میله‌ای فراوانی آمینواسیدها را رسم می‌کند و به صورت آبجکت تصویر Pillow برمی‌گرداند.
+    Plots a bar chart of amino acid frequencies and returns a PIL Image object.
     """
     if not frequencies:
         return None
@@ -33,24 +39,28 @@ def plot_amino_acid_frequencies(frequencies):
 
     fig, ax = plt.subplots(figsize=(10, 6))
     ax.bar(names, values, color='skyblue')
-    ax.set_xlabel("آمینواسید")
-    ax.set_ylabel("فراوانی")
-    ax.set_title("نمودار فراوانی آمینواسیدها")
+    ax.set_xlabel("Amino Acid")
+    ax.set_ylabel("Frequency")
+    ax.set_title("Amino Acid Frequency Plot")
     plt.xticks(rotation=45, ha="right")
     plt.tight_layout()
 
     buf = io.BytesIO()
     plt.savefig(buf, format='png')
     buf.seek(0)
-    img = Image.open(buf) # تبدیل بافر به آبجکت تصویر Pillow
-    plt.close(fig) # مهم: بستن شکل برای آزاد کردن حافظه
-    # buf.close() # بافر رو هم می‌بندیم (اختیاری، Image.open ممکنه خودش این کار رو بکنه)
+    img = Image.open(buf)
+    plt.close(fig)
     return img
 
 
 def get_protein_info(uniprot_id):
+    """
+    Fetches and processes protein information from UniProt API.
+    Returns main info markdown and a PIL image for the frequency plot (or updates for Gradio components).
+    """
     if not uniprot_id:
-        return " لطفاً یک شناسه UniProt وارد کنید.", None
+        # Return appropriate number of Nones or empty updates for all outputs
+        return "Please enter a UniProt ID.", gr.update(value=None, visible=False)
 
     url = UNIPROT_API_URL.format(accession=uniprot_id.strip().upper())
 
@@ -59,7 +69,6 @@ def get_protein_info(uniprot_id):
         response.raise_for_status()
         data = response.json()
 
-        # ... (بخش استخراج اطلاعات متنی بدون تغییر باقی می‌مونه) ...
         primary_accession = data.get("primaryAccession", "N/A")
         protein_data_dict = data.get("proteinDescription", {}).get("recommendedName", {})
         protein_name = protein_data_dict.get("fullName", {}).get("value", "N/A")
@@ -92,66 +101,70 @@ def get_protein_info(uniprot_id):
                      calculated_mol_weight = molecular_weight(cleaned_sequence_for_mw, seq_type="protein")
                      calculated_mol_weight_str = f"{calculated_mol_weight:.2f} Da"
                 else:
-                    calculated_mol_weight_str = "توالی نامعتبر"
-            except Exception: 
-                calculated_mol_weight_str = "خطا در محاسبه"
+                    calculated_mol_weight_str = "Invalid sequence for MW calculation"
+            except Exception:
+                calculated_mol_weight_str = "Error in MW calculation"
 
         comments = data.get("comments", [])
-        function_comment = "N/A"
+        function_comment_en = "N/A" # Changed to English
         for comment in comments:
             if comment.get("commentType") == "FUNCTION":
                 function_texts = comment.get("texts", [])
                 if function_texts:
-                    function_comment = function_texts[0].get("value", "N/A")
+                    function_comment_en = function_texts[0].get("value", "N/A")
                     break
         
+        # Main protein information in Markdown (English)
         main_info_md = (
-            f"**شناسه اصلی:** {primary_accession}\n"
-            f"**نام پروتئین:** {protein_name}\n"
-            f"**نام ژن:** {gene_name_str}\n"
-            f"**ارگانیسم:** {organism_name}\n"
-            f"**طول توالی:** {length} آمینو اسید\n"
-            f"**وزن مولکولی (محاسبه شده):** {calculated_mol_weight_str}\n\n"
-            f"**بخشی از عملکرد:**\n{function_comment}\n\n"
-            f"**توالی آمینواسیدی (100 حرف اول):**\n`{sequence[:100]}{'...' if len(sequence) > 100 else ''}`"
+            f"**Primary Accession:** {primary_accession}\n"
+            f"**Protein Name:** {protein_name}\n"
+            f"**Gene Name(s):** {gene_name_str}\n"
+            f"**Organism:** {organism_name}\n"
+            f"**Sequence Length:** {length} amino acids\n"
+            f"**Molecular Weight (calculated):** {calculated_mol_weight_str}\n\n"
+            f"**Function Snippet:**\n{function_comment_en}\n\n"
+            f"**Amino Acid Sequence (first 100 residues):**\n`{sequence[:100]}{'...' if len(sequence) > 100 else ''}`"
         )
         
         aa_frequencies, freq_error = get_amino_acid_frequencies(sequence)
-        aa_plot_pil_image = None # حالا یک آبجکت تصویر Pillow خواهد بود
-        if freq_error:
-            main_info_md += f"\n\n**تحلیل فراوانی آمینواسید:** {freq_error}"
-        elif aa_frequencies:
-            aa_plot_pil_image = plot_amino_acid_frequencies(aa_frequencies)
-        
-        return main_info_md, aa_plot_pil_image
+        aa_plot_pil_image_update = gr.update(value=None, visible=False) # Default to hidden
 
-    # ... (بخش مدیریت خطا بدون تغییر باقی می‌مونه) ...
+        if freq_error:
+            main_info_md += f"\n\n**Amino Acid Frequency Analysis:** {freq_error}"
+        elif aa_frequencies:
+            pil_image = plot_amino_acid_frequencies(aa_frequencies)
+            if pil_image:
+                aa_plot_pil_image_update = gr.update(value=pil_image, visible=True)
+        
+        return main_info_md, aa_plot_pil_image_update
+
     except requests.exceptions.HTTPError as http_err:
         status_code = http_err.response.status_code if http_err.response is not None else "N/A"
-        if status_code == 404:
-            return f"خطا: پروتئین با شناسه '{uniprot_id}' یافت نشد. لطفاً شناسه را بررسی کنید.", None
-        return f"خطای HTTP رخ داد: {http_err} (کد وضعیت: {status_code})", None
+        error_message_en = f"Error: Protein with ID '{uniprot_id}' not found. Please check the ID." if status_code == 404 else f"HTTP error occurred: {http_err} (Status code: {status_code})"
+        return error_message_en, gr.update(value=None, visible=False)
     except requests.exceptions.RequestException as req_err:
-        return f"خطای شبکه رخ داد: {req_err}", None
+        return f"A network error occurred: {req_err}", gr.update(value=None, visible=False)
     except Exception as e:
-        return f"یک خطای غیرمنتظره در پردازش داده‌ها رخ داد. لطفاً شناسه را بررسی کنید و دوباره تلاش نمایید.", None
+        # For debugging, you might want to log the full error
+        # print(f"Unexpected error for {uniprot_id}: {e}", file=sys.stderr)
+        # traceback.print_exc(file=sys.stderr)
+        return f"An unexpected error occurred while processing the data. Please check the ID and try again.", gr.update(value=None, visible=False)
 
-# تعریف رابط کاربری Gradio
-# outputs_list بدون تغییر، چون gr.Image(type="pil") آبجکت Pillow رو قبول می‌کنه
+
+# Define Gradio UI (English)
 outputs_list = [
-    gr.Markdown(label="اطلاعات پروتئین"),
-    gr.Image(label="نمودار فراوانی آمینواسیدها", type="pil", show_label=True) 
+    gr.Markdown(label="Protein Information"),
+    gr.Image(label="Amino Acid Frequency Plot", type="pil", show_label=True, visible=False) # Start hidden
 ]
 
-# اصلاح پارامتر allow_flagging به flagging_options (این هشدار هم در لاگ بود)
 iface = gr.Interface(
     fn=get_protein_info,
-    inputs=gr.Textbox(label="شناسه UniProt را وارد کنید (مثال: P05067 یا INS_HUMAN)", placeholder="مثلاً P0DP23"),
+    inputs=gr.Textbox(label="Enter UniProt ID (e.g., P05067 or INS_HUMAN)", placeholder="e.g., P0DP23"),
     outputs=outputs_list,
-    title="نمایشگر پروفایل پروتئین (نسخه بهبود یافته)",
-    description="شناسه یک پروتئین از UniProt را وارد کنید تا اطلاعات اولیه و نمودار فراوانی آمینواسیدهای آن نمایش داده شود.",
+    title="Protein Profile Viewer (Enhanced)",
+    description="Enter a UniProt ID to display its basic information and amino acid frequency plot.",
     examples=[["P05067"], ["INS_HUMAN"], ["CYC_HUMAN"], ["P12345"]],
-    flagging_options=None # جایگزین allow_flagging='never' برای نسخه‌های جدید Gradio
+    flagging_options=None 
 )
 
 if __name__ == "__main__":

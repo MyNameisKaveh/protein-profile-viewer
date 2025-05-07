@@ -40,7 +40,7 @@ def plot_amino_acid_frequencies(frequencies):
     img = Image.open(buf); plt.close(fig)
     return img
 
-def extract_sequence_features(uniprot_data):
+def extract_sequence_features(uniprot_data): # <<---- تعریف تابع با یک آرگومان
     features_of_interest_uppercase = {
         "DOMAIN": "blue", "MOTIF": "green", "ACTIVE_SITE": "red",
         "BINDING_SITE": "orange", "MOD_RES": "purple", 
@@ -157,8 +157,9 @@ def get_protein_info(uniprot_id):
             pil_image_aa = plot_amino_acid_frequencies(aa_frequencies)
             if pil_image_aa: aa_plot_update = gr.update(value=pil_image_aa, visible=True)
         
-        temp_debug_list_for_extract_features = [] # Removed UI debug output
-        seq_features = extract_sequence_features(uniprot_api_data, temp_debug_list_for_extract_features) 
+        # --- CORRECTED CALL TO extract_sequence_features ---
+        seq_features = extract_sequence_features(uniprot_api_data) 
+        # --- END OF CORRECTION ---
 
         feature_plot_update = gr.update(value=None, visible=False)
         if seq_features and length > 0:
@@ -171,27 +172,29 @@ def get_protein_info(uniprot_id):
         pdb_viewer_html_update = gr.update(value=None, visible=False)
         if pdb_id:
             iframe_html = f"""
-            <div id="ngl_viewport_{pdb_id.lower()}" style="width:100%; height:450px; border:1px solid #ccc;"></div>
+            <div id="ngl_viewport_{pdb_id.lower().replace('.', '_')}" style="width:100%; height:450px; border:1px solid #ccc;"></div>
             <script src="https://cdn.jsdelivr.net/npm/ngl@2.0.0-rc.1/dist/ngl.js"></script>
             <script>
                 document.addEventListener("DOMContentLoaded", function () {{
-                    varngl_stage = document.getElementById("ngl_viewport_{pdb_id.lower()}");
-                    if (ngl_stage && typeof NGL !== 'undefined') {{ // Check if NGL is loaded and div exists
-                        var stage = new NGL.Stage("ngl_viewport_{pdb_id.lower()}");
+                    var ngl_div_id = "ngl_viewport_{pdb_id.lower().replace('.', '_')}";
+                    var ngl_stage_element = document.getElementById(ngl_div_id);
+                    if (ngl_stage_element && typeof NGL !== 'undefined') {{
+                        var stage = new NGL.Stage(ngl_div_id);
                         stage.loadFile("rcsb://{pdb_id.upper()}", {{defaultRepresentation: true, ext: "pdb"}})
                         .then(function (o) {{
                             o.autoView();
                         }})
                         .catch(function (e) {{
-                            console.error("NGL loadFile error:", e);
-                            ngl_stage.innerHTML = "<p style='color:red;'>Error loading PDB: {pdb_id.upper()}<br>" + e + "</p>";
+                            console.error("NGL loadFile error for " + ngl_div_id + ":", e);
+                            ngl_stage_element.innerHTML = "<p style='color:red;'>Error loading PDB: {pdb_id.upper()}<br>" + e + "</p>";
                         }});
                         stage.setParameters({{backgroundColor: "white"}});
                         function handleResize() {{ stage.handleResize(); }}
                         window.addEventListener("resize", handleResize, false);
-                        handleResize();
-                    }} else if (!ngl_stage) {{
-                        console.error("NGL viewport div not found: ngl_viewport_{pdb_id.lower()}");
+                        // Delay initial resize slightly to ensure div is fully rendered
+                        setTimeout(handleResize, 100); 
+                    }} else if (!ngl_stage_element) {{
+                        console.error("NGL viewport div not found: " + ngl_div_id);
                     }} else if (typeof NGL === 'undefined') {{
                          console.error("NGL library not loaded.");
                     }}
@@ -213,7 +216,7 @@ def get_protein_info(uniprot_id):
     except requests.exceptions.RequestException as req_err:
         return f"A network error occurred: {req_err}", gr.update(value=None, visible=False), gr.update(value=None, visible=False), gr.update(value=None, visible=False)
     except Exception as e:
-        # traceback.print_exc(file=sys.stderr) # For server-side full traceback
+        # traceback.print_exc(file=sys.stderr) 
         return f"An unexpected error occurred while processing ID '{uniprot_id}'. Details: {str(e)[:150]}", gr.update(value=None, visible=False), gr.update(value=None, visible=False), gr.update(value=None, visible=False)
 
 outputs_list = [
@@ -226,9 +229,9 @@ iface = gr.Interface(
     fn=get_protein_info,
     inputs=gr.Textbox(label="Enter UniProt ID (e.g., P05067 or INS_HUMAN)", placeholder="e.g., P0DP23"),
     outputs=outputs_list,
-    title="Protein Profile Viewer (v0.6 - 3D Viewer Added)", 
+    title="Protein Profile Viewer (v0.6.1 - Arg Fix)", 
     description="Enter a UniProt ID to display its basic information, amino acid frequency, sequence features, and 3D structure (if available).",
-    examples=[["P05067"], ["1A00"], ["6M0J"], ["P00533"], ["Q9BYF1"], ["P0DP23"]], # Added PDB IDs like 1A00, 6M0J
+    examples=[["P05067"], ["1A00"], ["6M0J"], ["P00533"], ["Q9BYF1"], ["P0DP23"]],
     flagging_options=None 
 )
 if __name__ == "__main__":

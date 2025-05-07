@@ -66,12 +66,12 @@ def plot_amino_acid_frequencies(frequencies):
 def extract_sequence_features(uniprot_data):
     """
     Extracts and categorizes sequence features from UniProt data.
+    More robust parsing for location.
     """
     features_of_interest = {
         "DOMAIN": "blue", "MOTIF": "green", "ACTIVE_SITE": "red",
-        "BINDING_SITE": "orange", "MOD_RES": "purple", "HELIX": "cyan",
-        "STRAND": "magenta", "TURN": "yellow" 
-        # Less common but potentially interesting: "REGION", "SITE", "TRANSMEM"
+        "BINDING_SITE": "orange", "MOD_RES": "purple", 
+        "HELIX": "cyan", "STRAND": "magenta", "TURN": "gold" 
     }
     
     extracted_features = []
@@ -81,39 +81,41 @@ def extract_sequence_features(uniprot_data):
             if feature_type in features_of_interest:
                 try:
                     location = feature.get("location", {})
-                    # Try to get 'start' and 'end' first, then 'begin' and 'end'
-                    start_info = location.get("start", {})
-                    end_info = location.get("end", {})
+                    begin_pos_val = None
+                    end_pos_val = None
 
-                    # If 'value' is not in start/end, it might be a single position or other format
-                    # For simplicity, we only handle ranges with defined start and end values for now.
-                    # UniProt can also have "position" for single point features.
+                    start_node = location.get("start")
+                    end_node = location.get("end")
                     
-                    start_val = start_info.get("value")
-                    end_val = end_info.get("value")
+                    if start_node is not None and isinstance(start_node, dict) and "value" in start_node:
+                        begin_pos_val = start_node["value"]
+                    if end_node is not None and isinstance(end_node, dict) and "value" in end_node:
+                        end_pos_val = end_node["value"]
 
-                    # If start/end are not present, try begin/end (older UniProt format or different feature types)
-                    if start_val is None and "begin" in location: # Not common in new JSON but good fallback
-                        start_val = location.get("begin", {}).get("value")
-                    if end_val is None and "end" in location: # Not common in new JSON
-                        end_val = location.get("end", {}).get("value")
+                    # Fallback for older/alternative formats or single positions
+                    if begin_pos_val is None: # If start.value was not found
+                        if "begin" in location and isinstance(location["begin"], dict) and "value" in location["begin"]:
+                            begin_pos_val = location["begin"]["value"]
+                        elif "position" in location and isinstance(location["position"], dict) and "value" in location["position"]:
+                             begin_pos_val = location["position"]["value"]
                     
-                    # If it's a single position feature (e.g. MOD_RES)
-                    if start_val is None and end_val is None and "position" in location:
-                        pos_info = location.get("position", {})
-                        if "value" in pos_info:
-                            start_val = pos_info["value"]
-                            end_val = start_val # Single point, so start and end are the same
+                    if end_pos_val is None: # If end.value was not found
+                        if "end" in location and isinstance(location["end"], dict) and "value" in location["end"]:
+                            end_pos_val = location["end"]["value"]
+                        elif "position" in location and isinstance(location["position"], dict) and "value" in location["position"]: # For single pos
+                            if begin_pos_val is not None: # Ensure we use the same value if it was from position
+                                end_pos_val = begin_pos_val
 
-                    if start_val is None or end_val is None:
-                        # print(f"Skipping feature due to missing start/end/position value: {feature_type} - {location}", file=sys.stderr)
+
+                    if begin_pos_val is None or end_pos_val is None:
+                        # print(f"Skipping feature (no valid pos): {feature_type} - Loc: {location}", file=sys.stderr)
                         continue 
 
-                    begin_pos = int(start_val)
-                    end_pos = int(end_val)
+                    begin_pos = int(begin_pos_val)
+                    end_pos = int(end_pos_val)
                     
                     if begin_pos > end_pos:
-                        # print(f"Skipping feature due to invalid range (begin > end): {feature_type} {begin_pos}-{end_pos}", file=sys.stderr)
+                        # print(f"Skipping feature (begin > end): {feature_type} {begin_pos}-{end_pos}", file=sys.stderr)
                         continue
 
                     description = feature.get("description", feature_type)
@@ -123,7 +125,7 @@ def extract_sequence_features(uniprot_data):
                         "description": description, "color": features_of_interest[feature_type]
                     })
                 except (ValueError, TypeError, AttributeError) as e:
-                    # print(f"Error parsing feature: {feature_type} - Location: {location} - Error: {e}", file=sys.stderr)
+                    # print(f"Error parsing feature details: {feature_type} - Feat: {feature} - Err: {e}", file=sys.stderr)
                     continue 
     return extracted_features
 
@@ -135,7 +137,7 @@ def plot_sequence_features(sequence_length, features):
     if not features or sequence_length == 0:
         return None
 
-    fig, ax = plt.subplots(figsize=(12, max(3, len(features) * 0.4) + 1.5)) # Increased height slightly for legend
+    fig, ax = plt.subplots(figsize=(12, max(3, len(features) * 0.4) + 1.5)) 
     ax.set_xlim(0, sequence_length)
     
     ax.set_xlabel("Amino Acid Position")
@@ -152,10 +154,9 @@ def plot_sequence_features(sequence_length, features):
         end = feature["end"]
         color = feature["color"]
         
-        # Ensure width is at least 1 for single-point features
-        width = max(1, end - begin +1 if end == begin else end - begin) # +1 for MOD_RES type where end==begin
+        width = max(1, end - begin + 1) # Ensure min width of 1, +1 because positions are 1-based & inclusive
         
-        ax.barh(y_pos_counter, width, height=bar_height, left=begin, color=color, edgecolor='black', alpha=0.7)
+        ax.barh(y_pos_counter, width, height=bar_height, left=begin -1, color=color, edgecolor='black', alpha=0.7) # left is 0-based
         
         if feature['type'] not in plotted_feature_types_in_legend:
             legend_handles[feature['type']] = plt.Rectangle((0, 0), 1, 1, fc=color, alpha=0.7)
@@ -172,7 +173,7 @@ def plot_sequence_features(sequence_length, features):
     if legend_handles:
         ax.legend(legend_handles.values(), legend_handles.keys(), title="Feature Types", bbox_to_anchor=(1.02, 1), loc='upper left', fontsize=8)
 
-    plt.tight_layout(rect=[0, 0, 0.83, 0.96]) # Adjusted rect for title and legend
+    plt.tight_layout(rect=[0, 0, 0.83, 0.96])
 
     buf = io.BytesIO()
     plt.savefig(buf, format='png')
@@ -210,7 +211,7 @@ def get_protein_info(uniprot_id):
             gene_name_str = ", ".join(filter(None, gene_names_list)) or "N/A"
 
         organism_data = uniprot_api_data.get("organism", {})
-        organism_name = organism_data.get("scientificName", "N/A")
+        organism_name = uniprot_api_data.get("scientificName", "N/A")
         if organism_data.get("commonName"):
             organism_name += f" ({organism_data.get('commonName')})"
 
@@ -257,7 +258,7 @@ def get_protein_info(uniprot_id):
             raw_feature_types = Counter([f.get('type', 'UNKNOWN_TYPE') for f in uniprot_api_data['features']])
             main_info_md += f"**Raw feature types found:** {dict(raw_feature_types)}\n"
         
-        seq_features = extract_sequence_features(uniprot_api_data)
+        seq_features = extract_sequence_features(uniprot_api_data) # This uses the updated extract_sequence_features
         main_info_md += f"**Extracted features (of interest) count:** {len(seq_features)}\n"
         if seq_features:
             extracted_feature_types_counts = Counter([f['type'] for f in seq_features])
@@ -269,7 +270,7 @@ def get_protein_info(uniprot_id):
         aa_frequencies, freq_error = get_amino_acid_frequencies(sequence)
         aa_plot_update = gr.update(value=None, visible=False)
         if freq_error:
-            main_info_md += f"\n\n**Amino Acid Frequency Analysis:** {freq_error}" # Append error to main markdown
+            main_info_md += f"\n\n**Amino Acid Frequency Analysis:** {freq_error}"
         elif aa_frequencies:
             pil_image_aa = plot_amino_acid_frequencies(aa_frequencies)
             if pil_image_aa:
@@ -277,12 +278,12 @@ def get_protein_info(uniprot_id):
 
         # Sequence features plot
         feature_plot_update = gr.update(value=None, visible=False)
-        if seq_features and length > 0: # Check if we extracted any features
+        if seq_features and length > 0:
             pil_image_features = plot_sequence_features(length, seq_features)
             if pil_image_features:
                 feature_plot_update = gr.update(value=pil_image_features, visible=True)
-            else: # If plot_sequence_features returns None (e.g., no features to plot after filtering)
-                 main_info_md += "\n\n**Sequence Features:** Could not generate feature plot (e.g. no plottable features)."
+            else:
+                 main_info_md += "\n\n**Sequence Features:** Could not generate feature plot (e.g. no plottable features after filtering)."
         elif not seq_features and length > 0 : 
              main_info_md += "\n\n**Sequence Features:** No features of the selected types found or feature data is unavailable."
         
@@ -301,7 +302,7 @@ def get_protein_info(uniprot_id):
 
 # Define Gradio UI (English)
 outputs_list = [
-    gr.Markdown(label="Protein Information"), # Will include debug info now
+    gr.Markdown(label="Protein Information"),
     gr.Image(label="Amino Acid Frequency Plot", type="pil", show_label=True, visible=False),
     gr.Image(label="Sequence Features Plot", type="pil", show_label=True, visible=False)
 ]
@@ -310,7 +311,7 @@ iface = gr.Interface(
     fn=get_protein_info,
     inputs=gr.Textbox(label="Enter UniProt ID (e.g., P05067 or INS_HUMAN)", placeholder="e.g., P0DP23"),
     outputs=outputs_list,
-    title="Protein Profile Viewer (v0.4 - Debug Features)", # Version updated
+    title="Protein Profile Viewer (v0.4.1 - Debug Features)", # Version updated
     description="Enter a UniProt ID to display its basic information, amino acid frequency, and sequence features plot. Debug info for features is currently active.",
     examples=[["P05067"], ["INS_HUMAN"], ["CYC_HUMAN"],["Q9BYF1"], ["P0DP23"], ["P00533"], ["P04637"]],
     flagging_options=None 
